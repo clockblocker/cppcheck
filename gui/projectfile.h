@@ -32,9 +32,6 @@
 #include <QString>
 #include <QStringList>
 
-class QXmlStreamReader;
-class QXmlStreamWriter;
-
 /// @addtogroup GUI
 /// @{
 
@@ -422,9 +419,6 @@ public:
     class SafeChecks : public Settings::SafeChecks {
     public:
         SafeChecks() : Settings::SafeChecks() {}
-
-        void loadFromXml(QXmlStreamReader &xmlReader);
-        void saveToXml(QXmlStreamWriter &xmlWriter) const;
     };
 
     SafeChecks safeChecks;
@@ -457,94 +451,6 @@ public:
 
     /** Set user includes in settings if non-empty */
     void setSettingsUserIncludes(Settings &settings) const;
-
-
-protected:
-
-    /**
-     * @brief Read optional root path from XML.
-     * @param reader XML stream reader.
-     */
-    void readRootPath(const QXmlStreamReader &reader);
-
-    void readBuildDir(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read importproject from XML.
-     * @param reader XML stream reader.
-     */
-    void readImportProject(QXmlStreamReader &reader);
-
-    static bool readBool(QXmlStreamReader &reader);
-
-    static int readInt(QXmlStreamReader &reader, int defaultValue);
-
-    static QString readString(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read list of include directories from XML.
-     * @param reader XML stream reader.
-     */
-    void readIncludeDirs(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read list of defines from XML.
-     * @param reader XML stream reader.
-     */
-    void readDefines(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read list paths to check.
-     * @param reader XML stream reader.
-     */
-    void readCheckPaths(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read lists of excluded paths.
-     * @param reader XML stream reader.
-     */
-    void readExcludes(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read lists of Visual Studio configurations
-     * @param reader XML stream reader.
-     */
-    void readVsConfigurations(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read platform text.
-     * @param reader XML stream reader.
-     */
-    void readPlatform(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read suppressions.
-     * @param reader XML stream reader.
-     */
-    void readSuppressions(QXmlStreamReader &reader);
-
-    /**
-     * @brief Read tag warnings, what warnings are tagged with a specific tag
-     * @param reader XML stream reader.
-     */
-    void readTagWarnings(QXmlStreamReader &reader, const QString &tag);
-
-    /**
-     * @brief Read string list
-     * @param stringlist   destination string list
-     * @param reader       XML stream reader
-     * @param elementname  elementname for each string
-     */
-    static void readStringList(QStringList &stringlist, QXmlStreamReader &reader, const char elementname[]);
-
-    /**
-     * @brief Write string list
-     * @param xmlWriter xml writer
-     * @param stringlist string list to write
-     * @param startelementname name of start element
-     * @param stringelementname name of each string element
-     */
-    static void writeStringList(QXmlStreamWriter &xmlWriter, const QStringList &stringlist, const char startelementname[], const char stringelementname[]);
 
 private:
 

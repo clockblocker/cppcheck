@@ -9,7 +9,7 @@ add_executable(test-projectfile
         )
 target_include_directories(test-projectfile PRIVATE ${CMAKE_SOURCE_DIR}/gui ${CMAKE_SOURCE_DIR}/lib)
 target_compile_definitions(test-projectfile PRIVATE SRCDIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(test-projectfile ${QT_CORE_LIB} ${QT_TEST_LIB})
+target_link_libraries(test-projectfile ${QT_CORE_LIB} ${QT_TEST_LIB} reflectcpp)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     if(QT_VERSION VERSION_GREATER_EQUAL "6.9.0")
