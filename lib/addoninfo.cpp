@@ -23,10 +23,14 @@
 
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <string>
 #include <utility>
+#include <variant>
+#include <vector>
 
-#include "json.h"
+#include <rfl/json.hpp>
 
 static std::string getFullPath(const std::string &fileName, const std::string &exename, bool debug = false) {
     if (debug)
@@ -73,113 +77,89 @@ static std::string getFullPath(const std::string &fileName, const std::string &e
     return "";
 }
 
-static std::string parseAddonInfo(AddonInfo& addoninfo, const picojson::value &json, const std::string &fileName, const std::string &exename) {
-    const std::string& json_error = picojson::get_last_error();
-    if (!json_error.empty()) {
-        return "Loading " + fileName + " failed. " + json_error;
-    }
-    if (!json.is<picojson::object>())
-        return "Loading " + fileName + " failed. JSON is not an object.";
+namespace {
+struct AddonInfoJson {
+    std::optional<std::vector<std::string>> args;
+    std::optional<bool> ctu;
+    std::optional<std::string> python;
+    std::optional<std::vector<std::map<std::string, std::string>>> checkers;
+    std::optional<std::string> executable;
+    std::optional<std::string> script;
+};
+}
 
-    // TODO: remove/complete default value handling for missing fields
-    const picojson::object& obj = json.get<picojson::object>();
-    {
-        const auto it = obj.find("args");
-        if (it != obj.cend()) {
-            const auto& val = it->second;
-            if (!val.is<picojson::array>())
-                return "Loading " + fileName + " failed. 'args' must be an array.";
-            for (const picojson::value &v : val.get<picojson::array>()) {
-                if (!v.is<std::string>())
-                    return "Loading " + fileName + " failed. 'args' entry is not a string.";
-                addoninfo.args += " " + v.get<std::string>();
+static std::string formatAddonError(const rfl::Error& err, const std::string& fileName) {
+    const std::string prefix = "Loading " + fileName + " failed. ";
+    if (err.kind() == rfl::ErrorKind::syntax_error)
+        return prefix + err.what();
+
+    for (const auto& d : err.details()) {
+        if (d.path.empty()) {
+            if (d.kind == rfl::ErrorKind::invalid_type)
+                return prefix + "JSON is not an object.";
+            continue;
+        }
+        const auto* field = std::get_if<std::string>(&d.path.front());
+        if (!field)
+            continue;
+        if (d.kind == rfl::ErrorKind::missing_field)
+            return prefix + "'" + *field + "' is missing.";
+        if (d.kind == rfl::ErrorKind::invalid_type) {
+            if (*field == "args")
+                return prefix + (d.path.size() == 1 ? "'args' must be an array." : "'args' entry is not a string.");
+            if (*field == "ctu")
+                return prefix + "'ctu' must be a boolean.";
+            if (*field == "python")
+                return prefix + "'python' must be a string.";
+            if (*field == "checkers") {
+                if (d.path.size() == 1)
+                    return prefix + "'checkers' must be an array.";
+                if (d.path.size() == 2)
+                    return prefix + "'checkers' entry is not an object.";
+                return prefix + "'checkers' entry requirement is not a string.";
             }
+            if (*field == "executable")
+                return prefix + "'executable' must be a string.";
+            if (*field == "script")
+                return prefix + "'script' must be a string.";
         }
     }
+    return prefix + err.what();
+}
 
-    {
-        const auto it = obj.find("ctu");
-        if (it != obj.cend()) {
-            const auto& val = it->second;
-            // ctu is specified in the config file
-            if (!val.is<bool>())
-                return "Loading " + fileName + " failed. 'ctu' must be a boolean.";
-            addoninfo.ctu = val.get<bool>();
-        }
-        else {
-            addoninfo.ctu = false;
+static std::string parseAddonInfo(AddonInfo& addoninfo, const rfl::Result<AddonInfoJson>& parsed, const std::string& fileName, const std::string& exename) {
+    if (!parsed)
+        return formatAddonError(parsed.error(), fileName);
+
+    const AddonInfoJson& cfg = *parsed;
+    if (cfg.args) {
+        for (const std::string& v : *cfg.args)
+            addoninfo.args += " " + v;
+    }
+    addoninfo.ctu = cfg.ctu.value_or(false);
+    addoninfo.python = cfg.python.value_or("");
+    if (cfg.checkers) {
+        for (const auto& checkerObj : *cfg.checkers) {
+            if (checkerObj.size() == 1)
+                addoninfo.checkers.emplace(checkerObj.begin()->first, checkerObj.begin()->second);
         }
     }
-
-    {
-        const auto it = obj.find("python");
-        if (it != obj.cend()) {
-            const auto& val = it->second;
-            // Python was defined in the config file
-            if (!val.is<std::string>()) {
-                return "Loading " + fileName +" failed. 'python' must be a string.";
-            }
-            addoninfo.python = val.get<std::string>();
-        }
-        else {
-            addoninfo.python = "";
-        }
+    if (cfg.executable) {
+        std::string e = *cfg.executable;
+        addoninfo.executable = getFullPath(e, fileName);
+        if (addoninfo.executable.empty())
+            addoninfo.executable = std::move(e);
+        return ""; // <- do not load both "executable" and "script".
     }
-
-    {
-        const auto it = obj.find("checkers");
-        if (it != obj.cend()) {
-            const auto& val = it->second;
-            if (!val.is<picojson::array>())
-                return "Loading " + fileName + " failed. 'checkers' must be an array.";
-            for (const picojson::value &v : val.get<picojson::array>()) {
-                if (!v.is<picojson::object>())
-                    return "Loading " + fileName + " failed. 'checkers' entry is not an object.";
-
-                const picojson::object& checkerObj = v.get<picojson::object>();
-                if (checkerObj.size() == 1) {
-                    const std::string c = checkerObj.begin()->first;
-                    if (!checkerObj.begin()->second.is<std::string>())
-                        return "Loading " + fileName + " failed. 'checkers' entry requirement is not a string.";
-                    const std::string req = checkerObj.begin()->second.get<std::string>();
-                    addoninfo.checkers.emplace(c, req);
-                }
-            }
-        }
-    }
-
-    {
-        const auto it = obj.find("executable");
-        if (it != obj.cend()) {
-            const auto& val = it->second;
-            if (!val.is<std::string>())
-                return "Loading " + fileName + " failed. 'executable' must be a string.";
-            std::string e = val.get<std::string>();
-            addoninfo.executable = getFullPath(e, fileName);
-            if (addoninfo.executable.empty())
-                addoninfo.executable = std::move(e);
-            return ""; // <- do not load both "executable" and "script".
-        }
-    }
-
-    const auto it = obj.find("script");
-    if (it == obj.cend())
+    if (!cfg.script)
         return "Loading " + fileName + " failed. 'script' is missing.";
 
-    const auto& val = it->second;
-    if (!val.is<std::string>())
-        return "Loading " + fileName + " failed. 'script' must be a string.";
-
-    return addoninfo.getAddonInfo(val.get<std::string>(), exename);
+    return addoninfo.getAddonInfo(*cfg.script, exename);
 }
 
 std::string AddonInfo::getAddonInfo(const std::string &fileName, const std::string &exename, bool debug) {
-    if (fileName[0] == '{') {
-        picojson::value json;
-        const std::string err = picojson::parse(json, fileName);
-        (void)err; // TODO: report
-        return parseAddonInfo(*this, json, fileName, exename);
-    }
+    if (!fileName.empty() && fileName[0] == '{')
+        return parseAddonInfo(*this, rfl::json::read<AddonInfoJson>(fileName), fileName, exename);
     if (fileName.find('.') == std::string::npos)
         return getAddonInfo(fileName + ".py", exename, debug);
 
@@ -214,7 +194,5 @@ std::string AddonInfo::getAddonInfo(const std::string &fileName, const std::stri
         if (name.find('/') != std::string::npos)
             name = name.substr(name.rfind('/') + 1);
     }
-    picojson::value json;
-    fin >> json;
-    return parseAddonInfo(*this, json, fileName, exename);
+    return parseAddonInfo(*this, rfl::json::read<AddonInfoJson>(fin), fileName, exename);
 }

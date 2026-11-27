@@ -36,12 +36,15 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 // Directory listing for wildcard <Import> support -- see listDirectoryFiles()
@@ -60,7 +63,7 @@
 
 #include "xml.h"
 
-#include "json.h"
+#include <rfl/json/stream.hpp>
 
 
 std::string ImportProject::collectArgs(const std::string &cmd, std::vector<std::string> &args)
@@ -1827,31 +1830,81 @@ ImportProject::Type ImportProject::import(const std::string &filename, Settings 
     return ImportProject::Type::FAILURE;
 }
 
+namespace {
+struct CompileCommandEntry {
+    std::string directory;
+    std::optional<std::vector<std::string>> arguments;
+    std::optional<std::string> command;
+    std::optional<std::string> file;
+};
+}
+
 bool ImportProject::processCompileCommands(std::istream &istr)
 {
-    picojson::value compileCommands;
-    istr >> compileCommands;
-    if (!compileCommands.is<picojson::array>()) {
-        errors.emplace_back("compilation database is not a JSON array");
-        return false;
-    }
-
+    rfl::json::StreamReader<CompileCommandEntry> reader(istr, rfl::json::StreamFormat::json_array);
     std::map<std::string, std::size_t> fsFileIds;
+    std::size_t entryIndex = 0;
 
-    for (const picojson::value &fileInfo : compileCommands.get<picojson::array>()) {
-        picojson::object obj = fileInfo.get<picojson::object>();
+    while (auto next = reader.next()) {
+        if (!*next) {
+            const auto& err = next->error();
+            const auto details = err.details();
+            auto findField = [&](std::string_view name) -> const rfl::ErrorDetail* {
+                for (const auto& d : details) {
+                    if (!d.path.empty()) {
+                        if (const auto* key = std::get_if<std::string>(&d.path.front()); key && *key == name)
+                            return &d;
+                    }
+                }
+                return nullptr;
+            };
 
-        if (obj.count("directory") == 0) {
-            errors.emplace_back("'directory' field in compilation database entry missing");
+            if (const auto* d = findField("directory")) {
+                if (d->kind == rfl::ErrorKind::missing_field)
+                    errors.emplace_back("'directory' field in compilation database entry missing");
+                else if (d->kind == rfl::ErrorKind::invalid_type)
+                    errors.emplace_back("'directory' field in compilation database entry is not a string");
+                else
+                    errors.emplace_back(d->message);
+                return false;
+            }
+            if (const auto* d = findField("arguments")) {
+                if (d->kind == rfl::ErrorKind::invalid_type && d->path.size() == 1)
+                    errors.emplace_back("'arguments' field in compilation database entry is not a JSON array");
+                else
+                    errors.emplace_back("'arguments' entry in compilation database entry is not a string");
+                return false;
+            }
+            if (const auto* d = findField("command")) {
+                if (d->kind == rfl::ErrorKind::invalid_type)
+                    errors.emplace_back("'command' field in compilation database entry is not a string");
+                else
+                    errors.emplace_back(d->message);
+                return false;
+            }
+            if (const auto* d = findField("file")) {
+                if (d->kind == rfl::ErrorKind::invalid_type) {
+                    errors.emplace_back("skip compilation database entry because it does not have a proper 'file' field");
+                    ++entryIndex;
+                    continue;
+                }
+            }
+            if (err.kind() == rfl::ErrorKind::invalid_type) {
+                errors.emplace_back("compilation database entry is not a JSON object");
+                return false;
+            }
+            if (entryIndex == 0 && startsWith(err.what(), "Expected '['")) {
+                errors.emplace_back("compilation database is not a JSON array");
+                return false;
+            }
+            errors.emplace_back(err.what());
             return false;
         }
 
-        if (!obj["directory"].is<std::string>()) {
-            errors.emplace_back("'directory' field in compilation database entry is not a string");
-            return false;
-        }
+        ++entryIndex;
+        CompileCommandEntry& entry = **next;
 
-        std::string dirpath = Path::fromNativeSeparators(obj["directory"].get<std::string>());
+        std::string dirpath = Path::fromNativeSeparators(entry.directory);
 
         /* CMAKE produces the directory without trailing / so add it if not
          * there - it is needed by setIncludePaths() */
@@ -1861,26 +1914,10 @@ bool ImportProject::processCompileCommands(std::istream &istr)
         const std::string directory = std::move(dirpath);
 
         std::vector<std::string> arguments;
-        if (obj.count("arguments")) {
-            if (obj["arguments"].is<picojson::array>()) {
-                for (const picojson::value& arg : obj["arguments"].get<picojson::array>()) {
-                    if (arg.is<std::string>())
-                        arguments.push_back(arg.get<std::string>());
-                }
-            } else {
-                errors.emplace_back("'arguments' field in compilation database entry is not a JSON array");
-                return false;
-            }
-        } else if (obj.count("command")) {
-            std::string command;
-            if (obj["command"].is<std::string>()) {
-                command = obj["command"].get<std::string>();
-            } else {
-                errors.emplace_back("'command' field in compilation database entry is not a string");
-                return false;
-            }
-
-            std::string error = collectArgs(command, arguments);
+        if (entry.arguments) {
+            arguments = std::move(*entry.arguments);
+        } else if (entry.command) {
+            std::string error = collectArgs(*entry.command, arguments);
             if (!error.empty()) {
                 errors.emplace_back(error);
                 return false;
@@ -1890,12 +1927,12 @@ bool ImportProject::processCompileCommands(std::istream &istr)
             return false;
         }
 
-        if (!obj.count("file") || !obj["file"].is<std::string>()) {
+        if (!entry.file) {
             errors.emplace_back("skip compilation database entry because it does not have a proper 'file' field");
             continue;
         }
 
-        std::string file = Path::fromNativeSeparators(obj["file"].get<std::string>());
+        std::string file = Path::fromNativeSeparators(*entry.file);
 
         // Accept file?
         if (!Path::acceptFile(file))
