@@ -44,6 +44,10 @@ namespace tinyxml2 {
     class XMLElement;
 }
 
+namespace cppcheck::schemas {
+    struct ProjectFileSchema;
+}
+
 /// @addtogroup Core
 /// @{
 
@@ -156,13 +160,18 @@ public:
 
     static const std::string &importResultStr(ImportResult result);
 
+    /** Generate JSON Schema for .cppcheck project files */
+    static std::string projectFileJsonSchema();
+
 protected:
     bool processCompileCommands(std::istream &istr);
     bool importCppcheckGuiProject(std::istream &istr, Settings &settings, Suppressions &supprs);
+    bool importCppcheckGuiProjectJson(std::istream &istr, Settings &settings, Suppressions &supprs);
     static std::string collectArgs(const std::string &cmd, std::vector<std::string> &args);
     void setRelativePaths(const std::string &filename);
 
 private:
+    bool applyGuiProjectSchema(const cppcheck::schemas::ProjectFileSchema &schema, Settings &settings, Suppressions &supprs);
     struct PropertyValueExpander;
     class ConditionParser;
 

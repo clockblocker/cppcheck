@@ -21,6 +21,7 @@
 #include "helpers.h"
 #include "importproject.h"
 #include "redirect.h"
+#include "schemas.h"
 #include "settings.h"
 #include "standards.h"
 #include "suppressions.h"
@@ -38,6 +39,7 @@ class TestImporter final : public ImportProject {
 public:
     using ImportProject::processCompileCommands;
     using ImportProject::importCppcheckGuiProject;
+    using ImportProject::importCppcheckGuiProjectJson;
     using ImportProject::collectArgs;
     using ImportProject::fsSetDefines;
     using ImportProject::fsSetIncludePaths;
@@ -85,6 +87,10 @@ private:
         TEST_CASE(importCppcheckGuiProjectPremiumMisra);
         TEST_CASE(importCppcheckGuiProjectAbsPath);    // absolute Unix path must not be prepended with mPath
         TEST_CASE(importCppcheckGuiProjectRelPathWithBase); // relative path must be prepended with mPath
+        TEST_CASE(importCppcheckGuiProjectXmlRoundtrip);
+        TEST_CASE(importCppcheckGuiProjectJsonFile);
+        TEST_CASE(importCppcheckGuiProjectUnknownElement);
+        TEST_CASE(importCppcheckGuiProjectJsonSchema);
         TEST_CASE(ignorePaths);
         TEST_CASE(testCollectArgs1);
         TEST_CASE(testCollectArgs2);
@@ -690,6 +696,144 @@ private:
         ASSERT_EQUALS(2, project.guiProject.pathNames.size());
         ASSERT_EQUALS("/abs/file.cpp", project.guiProject.pathNames[0]);
         ASSERT_EQUALS("../src/rel.cpp", project.guiProject.pathNames[1]);
+    }
+
+    void importCppcheckGuiProjectXmlRoundtrip() const {
+        REDIRECT;
+        cppcheck::schemas::ProjectFileSchema orig;
+        orig.version = std::string("1");
+        orig.root = cppcheck::schemas::NamedAttrSchema{std::string(".")};
+        orig.builddir = std::string("build-out");
+        orig.platform = std::string("unix64");
+        orig.analyze_all_vs_configs = true;
+        orig.check_headers = false;
+        orig.check_unused_templates = false;
+        orig.inline_suppression = true;
+        orig.max_ctu_depth = 5;
+        orig.max_template_recursion = 50;
+        orig.includedir = cppcheck::schemas::IncludeDirListSchema{{cppcheck::schemas::NamedAttrSchema{std::string("inc/")}}};
+        orig.defines = cppcheck::schemas::DefinesListSchema{{cppcheck::schemas::NamedAttrSchema{std::string("DEBUG=1")}}};
+        orig.undefines = cppcheck::schemas::UndefinesListSchema{{"NDEBUG"}};
+        orig.paths = cppcheck::schemas::PathsListSchema{{cppcheck::schemas::NamedAttrSchema{std::string("src/")}}};
+        orig.exclude = cppcheck::schemas::ExcludeListSchema{{cppcheck::schemas::NamedAttrSchema{std::string("thirdparty/")}}};
+        orig.libraries = cppcheck::schemas::LibrariesListSchema{{"posix"}};
+        orig.addons = cppcheck::schemas::AddonsListSchema{{"threadsafety"}};
+        orig.tools = cppcheck::schemas::ToolsListSchema{{"clang-tidy"}};
+        cppcheck::schemas::ProjectSuppressionSchema sup;
+        sup.fileName = std::string("src/a.cpp");
+        sup.lineNumber = 12;
+        sup.symbolName = std::string("x");
+        sup.errorId = std::string("uninitvar");
+        orig.suppressions = cppcheck::schemas::ProjectSuppressionsSchema{{sup}};
+        cppcheck::schemas::SafeChecksSchema sc;
+        sc.class_public = cppcheck::schemas::EmptyElement{};
+        sc.external_functions = cppcheck::schemas::EmptyElement{};
+        orig.safe_checks = sc;
+        orig.check_level_exhaustive = cppcheck::schemas::EmptyElement{};
+        orig.project_name = std::string("roundtrip-proj");
+
+        const std::string xml = cppcheck::schemas::writeProjectFileXml(orig);
+        ASSERT(xml.find("<project version=\"1\">") != std::string::npos);
+        ASSERT(xml.find("<check-level-exhaustive />") != std::string::npos);
+
+        std::istringstream istr(xml);
+        Settings s;
+        Suppressions supprs;
+        TestImporter project;
+        ASSERT_EQUALS(true, project.importCppcheckGuiProject(istr, s, supprs));
+        ASSERT_EQUALS("build-out", s.buildDir);
+        ASSERT_EQUALS("unix64", project.guiProject.platform);
+        ASSERT_EQUALS(true, s.analyzeAllVsConfigs);
+        ASSERT_EQUALS(false, s.checkHeaders);
+        ASSERT_EQUALS(false, s.checkUnusedTemplates);
+        ASSERT_EQUALS(true, s.inlineSuppressions);
+        ASSERT_EQUALS(5, s.maxCtuDepth);
+        ASSERT_EQUALS(50, s.maxTemplateRecursion);
+        ASSERT_EQUALS("DEBUG=1", s.userDefines);
+        ASSERT_EQUALS(1, s.userUndefs.count("NDEBUG"));
+        ASSERT_EQUALS(1, project.guiProject.pathNames.size());
+        ASSERT_EQUALS("src/", project.guiProject.pathNames[0]);
+        ASSERT_EQUALS(1, project.guiProject.libraries.size());
+        ASSERT_EQUALS("posix", project.guiProject.libraries.front());
+        ASSERT_EQUALS(true, s.clangTidy);
+        ASSERT_EQUALS(true, s.safeChecks.classes);
+        ASSERT_EQUALS(true, s.safeChecks.externalFunctions);
+        ASSERT_EQUALS(false, s.safeChecks.internalFunctions);
+        ASSERT_EQUALS_ENUM(Settings::CheckLevel::exhaustive, s.checkLevel);
+        const auto loadedSupprs = supprs.nomsg.getSuppressions();
+        ASSERT_EQUALS(1, loadedSupprs.size());
+        ASSERT_EQUALS("uninitvar", loadedSupprs.front().errorId);
+        ASSERT_EQUALS("src/a.cpp", loadedSupprs.front().fileName);
+        ASSERT_EQUALS(12, loadedSupprs.front().lineNumber);
+        ASSERT_EQUALS("x", loadedSupprs.front().symbolName);
+    }
+
+    void importCppcheckGuiProjectJsonFile() const {
+        REDIRECT;
+        cppcheck::schemas::ProjectFileSchema orig;
+        orig.version = std::string("1");
+        orig.builddir = std::string("json-build");
+        orig.platform = std::string("win64");
+        orig.paths = cppcheck::schemas::PathsListSchema{{cppcheck::schemas::NamedAttrSchema{std::string("app/")}}};
+        orig.includedir = cppcheck::schemas::IncludeDirListSchema{{cppcheck::schemas::NamedAttrSchema{std::string("include/")}}};
+        orig.check_level_reduced = cppcheck::schemas::EmptyElement{};
+        orig.inline_suppression = true;
+
+        const std::string json = cppcheck::schemas::writeProjectFileJson(orig);
+        const ScopedFile file("testproj.cppcheck.json", json);
+
+        Settings s;
+        Suppressions supprs;
+        TestImporter project;
+        ASSERT_EQUALS_ENUM(ImportProject::Type::CPPCHECK_GUI, project.import(file.path(), &s, &supprs));
+        ASSERT_EQUALS("json-build", s.buildDir);
+        ASSERT_EQUALS("win64", project.guiProject.platform);
+        ASSERT_EQUALS(1, project.guiProject.pathNames.size());
+        ASSERT_EQUALS("app/", project.guiProject.pathNames[0]);
+        ASSERT_EQUALS(1, s.includePaths.size());
+        ASSERT_EQUALS("include/", s.includePaths.front());
+        ASSERT_EQUALS_ENUM(Settings::CheckLevel::reduced, s.checkLevel);
+        ASSERT_EQUALS(true, s.inlineSuppressions);
+    }
+
+    void importCppcheckGuiProjectUnknownElement() const {
+        REDIRECT;
+        {
+            constexpr char xml[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                                   "<project version=\"1\">\n"
+                                   "    <bogus-element>1</bogus-element>\n"
+                                   "</project>\n";
+            std::istringstream istr(xml);
+            Settings s;
+            Suppressions supprs;
+            TestImporter project;
+            ASSERT_EQUALS(false, project.importCppcheckGuiProject(istr, s, supprs));
+            ASSERT_EQUALS(1, project.errors.size());
+            ASSERT_EQUALS("Unknown element 'bogus-element' in Cppcheck GUI project file", project.errors[0]);
+        }
+        {
+            constexpr char xml[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                                   "<project version=\"1\">\n"
+                                   "    <safe-checks>\n"
+                                   "        <unknown-check/>\n"
+                                   "    </safe-checks>\n"
+                                   "</project>\n";
+            std::istringstream istr(xml);
+            Settings s;
+            Suppressions supprs;
+            TestImporter project;
+            ASSERT_EQUALS(false, project.importCppcheckGuiProject(istr, s, supprs));
+            ASSERT_EQUALS(1, project.errors.size());
+            ASSERT_EQUALS("Unknown 'safe-checks' element 'unknown-check' in Cppcheck GUI project file", project.errors[0]);
+        }
+    }
+
+    void importCppcheckGuiProjectJsonSchema() const {
+        const std::string schema = ImportProject::projectFileJsonSchema();
+        ASSERT(schema.find("\"builddir\"") != std::string::npos);
+        ASSERT(schema.find("\"analyze-all-vs-configs\"") != std::string::npos);
+        ASSERT(schema.find("\"safe-checks\"") != std::string::npos);
+        ASSERT(schema.find("\"tag-warnings\"") != std::string::npos);
     }
 
     void ignorePaths() const {

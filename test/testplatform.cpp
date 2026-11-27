@@ -18,11 +18,10 @@
 
 #include "platform.h"
 #include "fixture.h"
+#include "helpers.h"
 #include "standards.h"
 
 #include <string>
-
-#include "xml.h"
 
 
 class TestPlatform : public TestFixture {
@@ -49,6 +48,10 @@ private:
         TEST_CASE(charMinMax);
         TEST_CASE(no_root_node);
         TEST_CASE(wrong_root_node);
+        TEST_CASE(xml_roundtrip);
+        TEST_CASE(json_roundtrip);
+        TEST_CASE(json_load_from_file);
+        TEST_CASE(json_schema);
     }
 
     class PlatformTest final : public Platform
@@ -57,8 +60,7 @@ private:
     };
 
     static bool readPlatform(PlatformTest& platform, const char* xmldata) {
-        tinyxml2::XMLDocument doc;
-        return (doc.Parse(xmldata) == tinyxml2::XML_SUCCESS) && platform.loadFromXmlDocument(&doc);
+        return platform.loadFromXml(xmldata);
     }
 
     void empty() const {
@@ -455,6 +457,84 @@ private:
                                    "<platforms/>";
         PlatformTest platform;
         ASSERT(!readPlatform(platform, xmldata));
+    }
+
+    void xml_roundtrip() const {
+        Platform orig;
+        PLATFORM(orig, Platform::Type::Unix32);
+        const std::string xml = orig.toXml();
+        ASSERT(xml.find("<platform>") != std::string::npos);
+        ASSERT(xml.find("<default-sign>signed</default-sign>") != std::string::npos);
+        ASSERT(xml.find("<long-double>12</long-double>") != std::string::npos);
+
+        Platform loaded;
+        ASSERT(loaded.loadFromXml(xml));
+        ASSERT_EQUALS(Platform::Type::File, loaded.type);
+        ASSERT(!loaded.isWindows());
+        ASSERT_EQUALS(orig.char_bit, loaded.char_bit);
+        ASSERT_EQUALS(orig.defaultSign, loaded.defaultSign);
+        ASSERT_EQUALS(orig.sizeof_bool, loaded.sizeof_bool);
+        ASSERT_EQUALS(orig.sizeof_short, loaded.sizeof_short);
+        ASSERT_EQUALS(orig.sizeof_int, loaded.sizeof_int);
+        ASSERT_EQUALS(orig.sizeof_long, loaded.sizeof_long);
+        ASSERT_EQUALS(orig.sizeof_long_long, loaded.sizeof_long_long);
+        ASSERT_EQUALS(orig.sizeof_float, loaded.sizeof_float);
+        ASSERT_EQUALS(orig.sizeof_double, loaded.sizeof_double);
+        ASSERT_EQUALS(orig.sizeof_long_double, loaded.sizeof_long_double);
+        ASSERT_EQUALS(orig.sizeof_pointer, loaded.sizeof_pointer);
+        ASSERT_EQUALS(orig.sizeof_size_t, loaded.sizeof_size_t);
+        ASSERT_EQUALS(orig.sizeof_wchar_t, loaded.sizeof_wchar_t);
+        ASSERT_EQUALS(orig.long_double_bit, loaded.long_double_bit);
+    }
+
+    void json_roundtrip() const {
+        Platform orig;
+        PLATFORM(orig, Platform::Type::Win64);
+        const std::string json = orig.toJson();
+        ASSERT(json.find("\"default-sign\":\"signed\"") != std::string::npos);
+        ASSERT(json.find("\"long-double\":8") != std::string::npos);
+        ASSERT(json.find("\"windows\":true") != std::string::npos);
+
+        Platform loaded;
+        ASSERT(loaded.loadFromJson(json));
+        ASSERT_EQUALS(Platform::Type::File, loaded.type);
+        ASSERT(loaded.isWindows());
+        ASSERT_EQUALS(orig.char_bit, loaded.char_bit);
+        ASSERT_EQUALS(orig.defaultSign, loaded.defaultSign);
+        ASSERT_EQUALS(orig.sizeof_bool, loaded.sizeof_bool);
+        ASSERT_EQUALS(orig.sizeof_short, loaded.sizeof_short);
+        ASSERT_EQUALS(orig.sizeof_int, loaded.sizeof_int);
+        ASSERT_EQUALS(orig.sizeof_long, loaded.sizeof_long);
+        ASSERT_EQUALS(orig.sizeof_long_long, loaded.sizeof_long_long);
+        ASSERT_EQUALS(orig.sizeof_float, loaded.sizeof_float);
+        ASSERT_EQUALS(orig.sizeof_double, loaded.sizeof_double);
+        ASSERT_EQUALS(orig.sizeof_long_double, loaded.sizeof_long_double);
+        ASSERT_EQUALS(orig.sizeof_pointer, loaded.sizeof_pointer);
+        ASSERT_EQUALS(orig.sizeof_size_t, loaded.sizeof_size_t);
+        ASSERT_EQUALS(orig.sizeof_wchar_t, loaded.sizeof_wchar_t);
+    }
+
+    void json_load_from_file() const {
+        const ScopedFile file("testplatform.json",
+                              "{\"char_bit\":8,\"default-sign\":\"unsigned\",\"windows\":false,"
+                              "\"sizeof\":{\"bool\":1,\"short\":2,\"int\":2,\"long\":4,\"long-long\":8,"
+                              "\"float\":4,\"double\":4,\"long-double\":4,\"pointer\":2,\"size_t\":2,\"wchar_t\":2}}");
+        Platform platform;
+        ASSERT(platform.loadFromFile({"."}, file.path()));
+        ASSERT_EQUALS(Platform::Type::File, platform.type);
+        ASSERT(!platform.isWindows());
+        ASSERT_EQUALS(8, platform.char_bit);
+        ASSERT_EQUALS('u', platform.defaultSign);
+        ASSERT_EQUALS(2, platform.sizeof_int);
+        ASSERT_EQUALS(16, platform.int_bit);
+    }
+
+    void json_schema() const {
+        const std::string schema = Platform::jsonSchema();
+        ASSERT(schema.find("\"default-sign\"") != std::string::npos);
+        ASSERT(schema.find("\"char_bit\"") != std::string::npos);
+        ASSERT(schema.find("\"sizeof\"") != std::string::npos);
+        ASSERT(schema.find("\"long-double\"") != std::string::npos);
     }
 };
 

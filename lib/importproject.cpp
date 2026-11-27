@@ -20,6 +20,7 @@
 
 #include "path.h"
 #include "pathmatch.h"
+#include "schemas.h"
 #include "settings.h"
 #include "standards.h"
 #include "suppressions.h"
@@ -1790,7 +1791,12 @@ ImportProject::Type ImportProject::import(const std::string &filename, Settings 
     const std::vector<std::string> fileFilters =
         settings ? settings->fileFilters : std::vector<std::string>();
 
-    if (endsWith(filename, ".json")) {
+    if (settings && supprs && endsWith(filename, ".cppcheck.json")) {
+        if (importCppcheckGuiProjectJson(fin, *settings, *supprs)) {
+            setRelativePaths(filename);
+            return ImportProject::Type::CPPCHECK_GUI;
+        }
+    } else if (endsWith(filename, ".json")) {
         if (processCompileCommands(fin)) {
             setRelativePaths(filename);
             return ImportProject::Type::COMPILE_DB;
@@ -5572,32 +5578,6 @@ static std::string joinRelativePath(const std::string &path1, const std::string 
     return path2;
 }
 
-static std::list<std::string> readXmlStringList(const tinyxml2::XMLElement *node, const std::string &path, const char name[], const char attribute[])
-{
-    std::list<std::string> ret;
-    for (const tinyxml2::XMLElement *child = node->FirstChildElement(); child; child = child->NextSiblingElement()) {
-        if (strcmp(child->Name(), name) != 0)
-            continue;
-        const char *attr = attribute ? child->Attribute(attribute) : child->GetText();
-        if (attr)
-            ret.emplace_back(joinRelativePath(path, attr));
-    }
-    return ret;
-}
-
-static std::list<std::string> readXmlPathMatchList(const tinyxml2::XMLElement *node, const std::string &path, const char name[], const char attribute[])
-{
-    std::list<std::string> ret;
-    for (const tinyxml2::XMLElement *child = node->FirstChildElement(); child; child = child->NextSiblingElement()) {
-        if (strcmp(child->Name(), name) != 0)
-            continue;
-        const char *attr = attribute ? child->Attribute(attribute) : child->GetText();
-        if (attr)
-            ret.emplace_back(PathMatch::joinRelativePattern(path, attr));
-    }
-    return ret;
-}
-
 static std::string join(const std::list<std::string> &strlist, const char *sep)
 {
     std::string ret;
@@ -5613,21 +5593,13 @@ static std::string istream_to_string(std::istream &istr)
     return std::string(std::istreambuf_iterator<char>(istr), eos);
 }
 
-bool ImportProject::importCppcheckGuiProject(std::istream &istr, Settings &settings, Suppressions &supprs)
+std::string ImportProject::projectFileJsonSchema()
 {
-    tinyxml2::XMLDocument doc;
-    const std::string xmldata = istream_to_string(istr);
-    const tinyxml2::XMLError error = doc.Parse(xmldata.data(), xmldata.size());
-    if (error != tinyxml2::XML_SUCCESS) {
-        errors.emplace_back(std::string("Cppcheck GUI project file is not a valid XML - ") + tinyxml2::XMLDocument::ErrorIDToName(error));
-        return false;
-    }
-    const tinyxml2::XMLElement * const rootnode = doc.FirstChildElement();
-    if (rootnode == nullptr || strcmp(rootnode->Name(), CppcheckXml::ProjectElementName) != 0) {
-        errors.emplace_back("Cppcheck GUI project file has no XML root node");
-        return false;
-    }
+    return cppcheck::schemas::projectFileJsonSchema();
+}
 
+bool ImportProject::applyGuiProjectSchema(const cppcheck::schemas::ProjectFileSchema &schema, Settings &settings, Suppressions &supprs)
+{
     const std::string &path = mPath;
 
     std::list<std::string> paths;
@@ -5637,143 +5609,131 @@ bool ImportProject::importCppcheckGuiProject(std::istream &istr, Settings &setti
     // default to --check-level=normal for import for now
     temp.setCheckLevel(Settings::CheckLevel::normal);
 
-    // TODO: this should support all available command-line options
-    for (const tinyxml2::XMLElement *node = rootnode->FirstChildElement(); node; node = node->NextSiblingElement()) {
-        const char* name = node->Name();
-        if (strcmp(name, CppcheckXml::RootPathName) == 0) {
-            const char* attr = node->Attribute(CppcheckXml::RootPathNameAttrib);
-            if (attr) {
-                temp.basePaths.push_back(Path::fromNativeSeparators(joinRelativePath(path, attr)));
-                temp.relativePaths = true;
-            }
-        } else if (strcmp(name, CppcheckXml::BuildDirElementName) == 0)
-            temp.buildDir = joinRelativePath(path, empty_if_null(node->GetText()));
-        else if (strcmp(name, CppcheckXml::IncludeDirElementName) == 0)
-            temp.includePaths = readXmlStringList(node, path, CppcheckXml::DirElementName, CppcheckXml::DirNameAttrib); // TODO: append instead of overwrite
-        else if (strcmp(name, CppcheckXml::DefinesElementName) == 0)
-            temp.userDefines = join(readXmlStringList(node, "", CppcheckXml::DefineName, CppcheckXml::DefineNameAttrib), ";"); // TODO: append instead of overwrite
-        else if (strcmp(name, CppcheckXml::UndefinesElementName) == 0) {
-            for (const std::string &u : readXmlStringList(node, "", CppcheckXml::UndefineName, nullptr))
-                temp.userUndefs.insert(u);
-        } else if (strcmp(name, CppcheckXml::UserIncludeElementName) == 0) {
-            const char* i = node->GetText();
-            if (i)
-                temp.userIncludes.emplace_back(i);
-        } else if (strcmp(name, CppcheckXml::ImportProjectElementName) == 0) {
-            const std::string t_str = empty_if_null(node->GetText());
-            if (!t_str.empty())
-                guiProject.projectFile = path + t_str;
-        }
-        else if (strcmp(name, CppcheckXml::PathsElementName) == 0)
-            paths = readXmlStringList(node, path, CppcheckXml::PathName, CppcheckXml::PathNameAttrib);
-        else if (strcmp(name, CppcheckXml::ExcludeElementName) == 0)
-            guiProject.excludedPaths = readXmlPathMatchList(node, path, CppcheckXml::ExcludePathName, CppcheckXml::ExcludePathNameAttrib); // TODO: append instead of overwrite
-        else if (strcmp(name, CppcheckXml::FunctionContracts) == 0)
-            ;
-        else if (strcmp(name, CppcheckXml::VariableContractsElementName) == 0)
-            ;
-        else if (strcmp(name, CppcheckXml::IgnoreElementName) == 0)
-            guiProject.excludedPaths = readXmlPathMatchList(node, path, CppcheckXml::IgnorePathName, CppcheckXml::IgnorePathNameAttrib); // TODO: append instead of overwrite
-        else if (strcmp(name, CppcheckXml::LibrariesElementName) == 0)
-            guiProject.libraries = readXmlStringList(node, "", CppcheckXml::LibraryElementName, nullptr); // TODO: append instead of overwrite
-        else if (strcmp(name, CppcheckXml::SuppressionsElementName) == 0) {
-            for (const tinyxml2::XMLElement *child = node->FirstChildElement(); child; child = child->NextSiblingElement()) {
-                if (strcmp(child->Name(), CppcheckXml::SuppressionElementName) != 0)
-                    continue;
-                SuppressionList::Suppression s;
-                s.errorId = empty_if_null(child->GetText());
-                s.fileName = empty_if_null(child->Attribute("fileName"));
-                if (!s.fileName.empty())
-                    s.fileName = joinRelativePath(path, s.fileName);
-                s.lineNumber = child->IntAttribute("lineNumber", SuppressionList::Suppression::NO_LINE); // TODO: should not depend on Suppression
-                s.symbolName = empty_if_null(child->Attribute("symbolName"));
-                s.hash = strToInt<std::size_t>(default_if_null(child->Attribute("hash"), "0"));
-                suppressions.push_back(std::move(s));
-            }
-        } else if (strcmp(name, CppcheckXml::VSConfigurationElementName) == 0)
-            guiProject.checkVsConfigs = readXmlStringList(node, "", CppcheckXml::VSConfigurationName, nullptr);
-        else if (strcmp(name, CppcheckXml::PlatformElementName) == 0)
-            guiProject.platform = empty_if_null(node->GetText());
-        else if (strcmp(name, CppcheckXml::AnalyzeAllVsConfigsElementName) == 0)
-            temp.analyzeAllVsConfigs = std::string(empty_if_null(node->GetText())) != "false";
-        else if (strcmp(name, CppcheckXml::Parser) == 0)
-            temp.clang = true;
-        else if (strcmp(name, CppcheckXml::AddonsElementName) == 0) {
-            const auto& addons = readXmlStringList(node, "", CppcheckXml::AddonElementName, nullptr);
-            temp.addons.insert(addons.cbegin(), addons.cend());
-            if (settings.premium) {
-                auto it = temp.addons.find("misra");
-                if (it != temp.addons.end()) {
-                    temp.addons.erase(it);
-                    temp.premiumArgs += " --misra-c-2012";
-                }
-            }
-        }
-        else if (strcmp(name, CppcheckXml::TagsElementName) == 0)
-            node->Attribute(CppcheckXml::TagElementName); // FIXME: Write some warning
-        else if (strcmp(name, CppcheckXml::ToolsElementName) == 0) {
-            const std::list<std::string> toolList = readXmlStringList(node, "", CppcheckXml::ToolElementName, nullptr);
-            for (const std::string &toolName : toolList) {
-                if (toolName == CppcheckXml::ClangTidy)
-                    temp.clangTidy = true;
-            }
-        } else if (strcmp(name, CppcheckXml::CheckHeadersElementName) == 0)
-            temp.checkHeaders = (strcmp(default_if_null(node->GetText(), ""), "true") == 0);
-        else if (strcmp(name, CppcheckXml::CheckLevelReducedElementName) == 0)
-            temp.setCheckLevel(Settings::CheckLevel::reduced);
-        else if (strcmp(name, CppcheckXml::CheckLevelNormalElementName) == 0)
-            temp.setCheckLevel(Settings::CheckLevel::normal);
-        else if (strcmp(name, CppcheckXml::CheckLevelExhaustiveElementName) == 0)
-            temp.setCheckLevel(Settings::CheckLevel::exhaustive);
-        else if (strcmp(name, CppcheckXml::CheckUnusedTemplatesElementName) == 0)
-            temp.checkUnusedTemplates = (strcmp(default_if_null(node->GetText(), ""), "true") == 0);
-        else if (strcmp(name, CppcheckXml::InlineSuppression) == 0)
-            temp.inlineSuppressions = (strcmp(default_if_null(node->GetText(), ""), "true") == 0);
-        else if (strcmp(name, CppcheckXml::MaxCtuDepthElementName) == 0)
-            temp.maxCtuDepth = strToInt<int>(default_if_null(node->GetText(), "2")); // TODO: bail out when missing?
-        else if (strcmp(name, CppcheckXml::MaxTemplateRecursionElementName) == 0)
-            temp.maxTemplateRecursion = strToInt<int>(default_if_null(node->GetText(), "100")); // TODO: bail out when missing?
-        else if (strcmp(name, CppcheckXml::CheckUnknownFunctionReturn) == 0)
-            ; // TODO
-        else if (strcmp(name, Settings::SafeChecks::XmlRootName) == 0) {
-            for (const tinyxml2::XMLElement *child = node->FirstChildElement(); child; child = child->NextSiblingElement()) {
-                const char* childname = child->Name();
-                if (strcmp(childname, Settings::SafeChecks::XmlClasses) == 0)
-                    temp.safeChecks.classes = true;
-                else if (strcmp(childname, Settings::SafeChecks::XmlExternalFunctions) == 0)
-                    temp.safeChecks.externalFunctions = true;
-                else if (strcmp(childname, Settings::SafeChecks::XmlInternalFunctions) == 0)
-                    temp.safeChecks.internalFunctions = true;
-                else if (strcmp(childname, Settings::SafeChecks::XmlExternalVariables) == 0)
-                    temp.safeChecks.externalVariables = true;
-                else {
-                    errors.emplace_back("Unknown '" + std::string(Settings::SafeChecks::XmlRootName) + "' element '" + childname + "' in Cppcheck GUI project file");
-                    return false;
-                }
-            }
-        } else if (strcmp(name, CppcheckXml::TagWarningsElementName) == 0)
-            ; // TODO
-        // Cppcheck Premium features
-        else if (strcmp(name, CppcheckXml::BughuntingElementName) == 0)
-            temp.premiumArgs += " --bughunting";
-        else if (strcmp(name, CppcheckXml::CertIntPrecisionElementName) == 0)
-            temp.premiumArgs += std::string(" --cert-c-int-precision=") + default_if_null(node->GetText(), "0");
-        else if (strcmp(name, CppcheckXml::CodingStandardsElementName) == 0) {
-            for (const tinyxml2::XMLElement *child = node->FirstChildElement(); child; child = child->NextSiblingElement()) {
-                if (strcmp(child->Name(), CppcheckXml::CodingStandardElementName) == 0) {
-                    const char* text = child->GetText();
-                    if (text)
-                        temp.premiumArgs += std::string(" --") + text;
-                }
-            }
-        }
-        else if (strcmp(name, CppcheckXml::ProjectNameElementName) == 0)
-            ; // no-op
-        else {
-            errors.emplace_back("Unknown element '" + std::string(name) + "' in Cppcheck GUI project file");
-            return false;
+    if (schema.root.has_value() && schema.root->name.value().has_value()) {
+        temp.basePaths.push_back(Path::fromNativeSeparators(joinRelativePath(path, *schema.root->name.value())));
+        temp.relativePaths = true;
+    }
+    if (schema.builddir.has_value())
+        temp.buildDir = joinRelativePath(path, *schema.builddir);
+    if (schema.includedir.has_value()) {
+        temp.includePaths.clear();
+        for (const auto &d : schema.includedir->dir) {
+            if (d.name.value().has_value())
+                temp.includePaths.emplace_back(joinRelativePath(path, *d.name.value()));
         }
     }
+    if (schema.defines.has_value()) {
+        std::list<std::string> defs;
+        for (const auto &d : schema.defines->define) {
+            if (d.name.value().has_value())
+                defs.emplace_back(*d.name.value());
+        }
+        temp.userDefines = join(defs, ";");
+    }
+    if (schema.undefines.has_value()) {
+        for (const std::string &u : schema.undefines->undefine)
+            temp.userUndefs.insert(u);
+    }
+    if (schema.user_include.value().has_value() && !schema.user_include.value()->empty())
+        temp.userIncludes.emplace_back(*schema.user_include.value());
+    if (schema.importproject.has_value() && !schema.importproject->empty())
+        guiProject.projectFile = path + *schema.importproject;
+    if (schema.paths.has_value()) {
+        for (const auto &d : schema.paths->dir) {
+            if (d.name.value().has_value())
+                paths.emplace_back(joinRelativePath(path, *d.name.value()));
+        }
+    }
+    if (schema.exclude.has_value()) {
+        guiProject.excludedPaths.clear();
+        for (const auto &p : schema.exclude->path) {
+            if (p.name.value().has_value())
+                guiProject.excludedPaths.emplace_back(PathMatch::joinRelativePattern(path, *p.name.value()));
+        }
+    }
+    if (schema.ignore.has_value()) {
+        guiProject.excludedPaths.clear();
+        for (const auto &p : schema.ignore->path) {
+            if (p.name.value().has_value())
+                guiProject.excludedPaths.emplace_back(PathMatch::joinRelativePattern(path, *p.name.value()));
+        }
+    }
+    if (schema.libraries.has_value())
+        guiProject.libraries.assign(schema.libraries->library.cbegin(), schema.libraries->library.cend());
+    if (schema.suppressions.has_value()) {
+        for (const auto &entry : schema.suppressions->suppression) {
+            SuppressionList::Suppression s;
+            if (entry.errorId.value().has_value())
+                s.errorId = *entry.errorId.value();
+            if (entry.fileName.value().has_value() && !entry.fileName.value()->empty())
+                s.fileName = joinRelativePath(path, *entry.fileName.value());
+            if (entry.lineNumber.value().has_value())
+                s.lineNumber = *entry.lineNumber.value();
+            if (entry.symbolName.value().has_value())
+                s.symbolName = *entry.symbolName.value();
+            if (entry.hash.value().has_value())
+                s.hash = *entry.hash.value();
+            suppressions.push_back(std::move(s));
+        }
+    }
+    if (schema.vs_configurations.value().has_value())
+        guiProject.checkVsConfigs.assign(schema.vs_configurations.value()->config.cbegin(), schema.vs_configurations.value()->config.cend());
+    if (schema.platform.has_value())
+        guiProject.platform = *schema.platform;
+    if (schema.analyze_all_vs_configs.value().has_value())
+        temp.analyzeAllVsConfigs = *schema.analyze_all_vs_configs.value();
+    if (schema.parser.has_value())
+        temp.clang = true;
+    if (schema.addons.has_value()) {
+        temp.addons.insert(schema.addons->addon.cbegin(), schema.addons->addon.cend());
+        if (settings.premium) {
+            auto it = temp.addons.find("misra");
+            if (it != temp.addons.end()) {
+                temp.addons.erase(it);
+                temp.premiumArgs += " --misra-c-2012";
+            }
+        }
+    }
+    if (schema.tools.has_value()) {
+        for (const std::string &toolName : schema.tools->tool) {
+            if (toolName == CppcheckXml::ClangTidy)
+                temp.clangTidy = true;
+        }
+    }
+    if (schema.check_headers.value().has_value())
+        temp.checkHeaders = *schema.check_headers.value();
+    if (schema.check_level_reduced.value().has_value())
+        temp.setCheckLevel(Settings::CheckLevel::reduced);
+    if (schema.check_level_normal.value().has_value())
+        temp.setCheckLevel(Settings::CheckLevel::normal);
+    if (schema.check_level_exhaustive.value().has_value())
+        temp.setCheckLevel(Settings::CheckLevel::exhaustive);
+    if (schema.check_unused_templates.value().has_value())
+        temp.checkUnusedTemplates = *schema.check_unused_templates.value();
+    if (schema.inline_suppression.value().has_value())
+        temp.inlineSuppressions = *schema.inline_suppression.value();
+    if (schema.max_ctu_depth.value().has_value())
+        temp.maxCtuDepth = *schema.max_ctu_depth.value();
+    if (schema.max_template_recursion.value().has_value())
+        temp.maxTemplateRecursion = *schema.max_template_recursion.value();
+    if (schema.safe_checks.value().has_value()) {
+        const auto &sc = *schema.safe_checks.value();
+        temp.safeChecks.classes = sc.class_public.value().has_value();
+        temp.safeChecks.externalFunctions = sc.external_functions.value().has_value();
+        temp.safeChecks.internalFunctions = sc.internal_functions.value().has_value();
+        temp.safeChecks.externalVariables = sc.external_variables.value().has_value();
+    }
+    if (schema.bug_hunting.value().has_value())
+        temp.premiumArgs += " --bughunting";
+    if (schema.cert_c_int_precision.value().has_value())
+        temp.premiumArgs += " --cert-c-int-precision=" + std::to_string(*schema.cert_c_int_precision.value());
+    if (schema.coding_standards.value().has_value()) {
+        for (const std::string &cs : schema.coding_standards.value()->coding_standard.value()) {
+            if (!cs.empty())
+                temp.premiumArgs += " --" + cs;
+        }
+    }
+
     settings.basePaths = temp.basePaths; // TODO: append instead of overwrite
     settings.relativePaths |= temp.relativePaths;
     settings.buildDir = temp.buildDir;
@@ -5815,6 +5775,29 @@ bool ImportProject::importCppcheckGuiProject(std::istream &istr, Settings &setti
     settings.setCheckLevel(temp.checkLevel);
 
     return true;
+}
+
+bool ImportProject::importCppcheckGuiProject(std::istream &istr, Settings &settings, Suppressions &supprs)
+{
+    const std::string xmldata = istream_to_string(istr);
+    std::string parseError;
+    const auto schema = cppcheck::schemas::parseProjectFileXml(xmldata, /*strictUnknownElements=*/true, parseError);
+    if (!schema) {
+        errors.emplace_back(std::move(parseError));
+        return false;
+    }
+    return applyGuiProjectSchema(*schema, settings, supprs);
+}
+
+bool ImportProject::importCppcheckGuiProjectJson(std::istream &istr, Settings &settings, Suppressions &supprs)
+{
+    const std::string jsondata = istream_to_string(istr);
+    const auto schema = cppcheck::schemas::parseProjectFileJson(jsondata);
+    if (!schema) {
+        errors.emplace_back("Cppcheck GUI project file is not valid JSON - " + schema.error().what());
+        return false;
+    }
+    return applyGuiProjectSchema(*schema, settings, supprs);
 }
 
 void ImportProject::selectOneVsConfig(Platform::Type platform)
