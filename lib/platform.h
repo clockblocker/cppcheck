@@ -31,14 +31,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /// @addtogroup Core
 /// @{
-
-namespace tinyxml2 {
-    class XMLDocument;
-}
 
 /**
  * @brief Platform settings
@@ -79,9 +76,6 @@ private:
     /** provides list of defines specified by the limit.h/climits includes */
     std::string getLimitsDefines(bool c99) const;
 
-protected:
-    /** load platform from xml document, primarily for testing */
-    bool loadFromXmlDocument(const tinyxml2::XMLDocument *doc);
 public:
     Platform();
 
@@ -165,6 +159,21 @@ public:
      * @return returns true if file was loaded successfully
      */
     bool loadFromFile(const std::vector<std::string>& paths, const std::string &filename, bool debug = false);
+
+    /** load platform from XML string */
+    bool loadFromXml(std::string_view xml);
+
+    /** load platform from JSON string */
+    bool loadFromJson(std::string_view json);
+
+    /** serialize platform to XML string */
+    std::string toXml() const;
+
+    /** serialize platform to JSON string */
+    std::string toJson() const;
+
+    /** generate JSON Schema for platform files */
+    static std::string jsonSchema();
 
 
     /**

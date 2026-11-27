@@ -19,14 +19,14 @@
 #include "platform.h"
 
 #include "path.h"
+#include "schemas.h"
 
-#include <cstring>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <utility>
 #include <vector>
-
-#include "xml.h"
 
 Platform::Platform()
 {
@@ -278,102 +278,137 @@ bool Platform::loadFromFile(const std::vector<std::string>& paths, const std::st
     }
 
     // open file..
-    tinyxml2::XMLDocument doc;
-    tinyxml2::XMLError err = tinyxml2::XML_SUCCESS;
+    std::string content;
+    std::string loadedFile;
+    bool opened = false;
     for (const std::string & f : filenames) {
         if (debug)
             std::cout << "try to load platform file '" << f << "' ... ";
-        err = doc.LoadFile(f.c_str());
-        if (err == tinyxml2::XML_SUCCESS) {
-            if (debug)
-                std::cout << "Success" << std::endl;
+        std::ifstream fin(f);
+        if (fin.is_open()) {
+            content.assign(std::istreambuf_iterator<char>(fin), std::istreambuf_iterator<char>());
+            loadedFile = f;
+            opened = true;
             break;
         }
         if (debug)
-            std::cout << doc.ErrorStr() << std::endl;
-        if (err != tinyxml2::XML_ERROR_FILE_NOT_FOUND)
-            break;
+            std::cout << "file not found" << std::endl;
     }
-    if (err != tinyxml2::XML_SUCCESS)
+    if (!opened)
         return false;
 
-    return loadFromXmlDocument(&doc);
+    const bool ok = (Path::getFilenameExtensionInLowerCase(loadedFile) == ".json")
+                        ? loadFromJson(content)
+                        : loadFromXml(content);
+    if (debug)
+        std::cout << (ok ? "Success" : "Failed to parse") << std::endl;
+    return ok;
 }
 
-static const char* xmlText(const tinyxml2::XMLElement* node, bool& error)
+static bool applyPlatformSchema(Platform& platform, const cppcheck::schemas::PlatformSchema& schema)
 {
-    const char* const str = node->GetText();
-    if (!str)
-        error = true;
-    return str;
-}
-
-static unsigned int xmlTextAsUInt(const tinyxml2::XMLElement* node, bool& error)
-{
-    unsigned int retval = 0;
-    if (node->QueryUnsignedText(&retval) != tinyxml2::XML_SUCCESS)
-        error = true;
-    return retval;
-}
-
-static unsigned int xmlTextAsBool(const tinyxml2::XMLElement* node, bool& error)
-{
-    bool retval = false;
-    if (node->QueryBoolText(&retval) != tinyxml2::XML_SUCCESS)
-        error = true;
-    return retval;
-}
-
-bool Platform::loadFromXmlDocument(const tinyxml2::XMLDocument *doc)
-{
-    const tinyxml2::XMLElement * const rootnode = doc->FirstChildElement();
-
-    if (!rootnode || std::strcmp(rootnode->Name(), "platform") != 0)
-        return false;
-
-    bool error = false;
-    for (const tinyxml2::XMLElement *node = rootnode->FirstChildElement(); node; node = node->NextSiblingElement()) {
-        const char* name = node->Name();
-        if (std::strcmp(name, "default-sign") == 0) {
-            const char * const str = xmlText(node, error);
-            if (!error)
-                defaultSign = *str;
-        } else if (std::strcmp(name, "char_bit") == 0)
-            char_bit = xmlTextAsUInt(node, error);
-        else if (std::strcmp(name, "sizeof") == 0) {
-            for (const tinyxml2::XMLElement *sz = node->FirstChildElement(); sz; sz = sz->NextSiblingElement()) {
-                const char* szname = sz->Name();
-                if (std::strcmp(szname, "short") == 0)
-                    sizeof_short = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "bool") == 0)
-                    sizeof_bool = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "int") == 0)
-                    sizeof_int = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "long") == 0)
-                    sizeof_long = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "long-long") == 0)
-                    sizeof_long_long = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "float") == 0)
-                    sizeof_float = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "double") == 0)
-                    sizeof_double = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "long-double") == 0)
-                    sizeof_long_double = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "pointer") == 0)
-                    sizeof_pointer = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "size_t") == 0)
-                    sizeof_size_t = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(szname, "wchar_t") == 0)
-                    sizeof_wchar_t = xmlTextAsUInt(sz, error);
-            }
-        }
-        else if (std::strcmp(node->Name(), "windows") == 0) {
-            windows = xmlTextAsBool(node, error);
-        }
+    if (schema.default_sign.value().has_value()) {
+        const std::string& sign = *schema.default_sign.value();
+        if (sign.empty())
+            return false;
+        platform.defaultSign = sign[0];
     }
+    if (schema.char_bit.has_value())
+        platform.char_bit = static_cast<std::uint8_t>(*schema.char_bit);
+    if (schema.sizeof_types.value().has_value()) {
+        const auto& sz = *schema.sizeof_types.value();
+        if (sz.short_size.value().has_value())
+            platform.sizeof_short = *sz.short_size.value();
+        if (sz.bool_size.value().has_value())
+            platform.sizeof_bool = *sz.bool_size.value();
+        if (sz.int_size.value().has_value())
+            platform.sizeof_int = *sz.int_size.value();
+        if (sz.long_size.value().has_value())
+            platform.sizeof_long = *sz.long_size.value();
+        if (sz.long_long_size.value().has_value())
+            platform.sizeof_long_long = *sz.long_long_size.value();
+        if (sz.float_size.value().has_value())
+            platform.sizeof_float = *sz.float_size.value();
+        if (sz.double_size.value().has_value())
+            platform.sizeof_double = *sz.double_size.value();
+        if (sz.long_double_size.value().has_value())
+            platform.sizeof_long_double = *sz.long_double_size.value();
+        if (sz.pointer_size.value().has_value())
+            platform.sizeof_pointer = *sz.pointer_size.value();
+        if (sz.size_t_size.value().has_value())
+            platform.sizeof_size_t = *sz.size_t_size.value();
+        if (sz.wchar_t_size.value().has_value())
+            platform.sizeof_wchar_t = *sz.wchar_t_size.value();
+    }
+    if (schema.windows.has_value())
+        platform.windows = *schema.windows;
+    return true;
+}
+
+static cppcheck::schemas::PlatformSchema toPlatformSchema(const Platform& platform)
+{
+    cppcheck::schemas::PlatformSchema schema;
+    schema.char_bit = platform.char_bit;
+    if (platform.defaultSign == 's')
+        schema.default_sign = std::string("signed");
+    else if (platform.defaultSign == 'u')
+        schema.default_sign = std::string("unsigned");
+    else if (platform.defaultSign != '\0')
+        schema.default_sign = std::string(1, platform.defaultSign);
+    cppcheck::schemas::PlatformSizeofSchema sz;
+    sz.bool_size = platform.sizeof_bool;
+    sz.short_size = platform.sizeof_short;
+    sz.int_size = platform.sizeof_int;
+    sz.long_size = platform.sizeof_long;
+    sz.long_long_size = platform.sizeof_long_long;
+    sz.float_size = platform.sizeof_float;
+    sz.double_size = platform.sizeof_double;
+    sz.long_double_size = platform.sizeof_long_double;
+    sz.pointer_size = platform.sizeof_pointer;
+    sz.size_t_size = platform.sizeof_size_t;
+    sz.wchar_t_size = platform.sizeof_wchar_t;
+    schema.sizeof_types = sz;
+    schema.windows = platform.windows;
+    return schema;
+}
+
+bool Platform::loadFromXml(std::string_view xml)
+{
+    const auto parsed = cppcheck::schemas::parsePlatformXml(xml);
+    if (!parsed)
+        return false;
+    if (!applyPlatformSchema(*this, *parsed))
+        return false;
     calculateBitMembers();
     type = Type::File;
-    return !error;
+    return true;
+}
+
+bool Platform::loadFromJson(std::string_view json)
+{
+    const auto parsed = cppcheck::schemas::parsePlatformJson(json);
+    if (!parsed)
+        return false;
+    if (!applyPlatformSchema(*this, *parsed))
+        return false;
+    calculateBitMembers();
+    type = Type::File;
+    return true;
+}
+
+std::string Platform::toXml() const
+{
+    return cppcheck::schemas::writePlatformXml(toPlatformSchema(*this));
+}
+
+std::string Platform::toJson() const
+{
+    return cppcheck::schemas::writePlatformJson(toPlatformSchema(*this));
+}
+
+std::string Platform::jsonSchema()
+{
+    return cppcheck::schemas::platformJsonSchema();
 }
 
 std::string Platform::getLimitsDefines(bool c99) const
