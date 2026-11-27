@@ -23,6 +23,7 @@
 #include "filesettings.h"
 #include "path.h"
 #include "pathmatch.h"
+#include "schemas.h"
 #include "utils.h"
 #include "token.h"
 #include "tokenlist.h"
@@ -30,13 +31,12 @@
 
 #include <algorithm>
 #include <cctype>   // std::isdigit, std::isalnum, etc
-#include <cstring>
 #include <exception>
+#include <fstream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
-
-#include "xml.h"
 
 static const char ID_CHECKERSREPORT[] = "checkersReport";
 
@@ -108,48 +108,135 @@ std::string SuppressionList::parseFile(std::istream &istr)
 }
 
 
+static SuppressionList::Suppression suppressionFromSchema(const cppcheck::schemas::SuppressEntrySchema& entry)
+{
+    SuppressionList::Suppression s;
+    if (entry.id.has_value())
+        s.errorId = *entry.id;
+    if (entry.fileName.has_value())
+        s.fileName = Path::simplifyPath(*entry.fileName);
+    if (entry.lineNumber.has_value())
+        s.lineNumber = *entry.lineNumber;
+    if (entry.symbolName.has_value())
+        s.symbolName = *entry.symbolName;
+    if (entry.macroName.has_value()) {
+        s.macroName = *entry.macroName;
+        s.type = SuppressionList::Type::macro;
+    }
+    if (entry.hash.has_value())
+        s.hash = *entry.hash;
+    return s;
+}
+
+static cppcheck::schemas::SuppressionsFileSchema toSuppressionsFileSchema(const std::list<SuppressionList::Suppression>& suppressions)
+{
+    cppcheck::schemas::SuppressionsFileSchema schema;
+    schema.suppress.reserve(suppressions.size());
+    for (const auto& s : suppressions) {
+        cppcheck::schemas::SuppressEntrySchema entry;
+        if (!s.errorId.empty())
+            entry.id = s.errorId;
+        if (!s.fileName.empty())
+            entry.fileName = s.fileName;
+        if (s.lineNumber != SuppressionList::Suppression::NO_LINE)
+            entry.lineNumber = s.lineNumber;
+        if (!s.symbolName.empty())
+            entry.symbolName = s.symbolName;
+        if (!s.macroName.empty())
+            entry.macroName = s.macroName;
+        if (s.hash > 0)
+            entry.hash = s.hash;
+        schema.suppress.push_back(std::move(entry));
+    }
+    return schema;
+}
+
 std::string SuppressionList::parseXmlFile(const char *filename)
 {
-    tinyxml2::XMLDocument doc;
-    const tinyxml2::XMLError error = doc.LoadFile(filename);
-    if (error != tinyxml2::XML_SUCCESS)
-        return std::string("failed to load suppressions XML '") + filename + "' (" + tinyxml2::XMLDocument::ErrorIDToName(error) + ").";
+    const std::string fname = filename ? filename : "";
+    std::ifstream fin(fname, std::ios::binary);
+    if (!filename || !fin.is_open())
+        return "failed to load suppressions XML '" + fname + "' (XML_ERROR_FILE_NOT_FOUND).";
 
-    const tinyxml2::XMLElement * const rootnode = doc.FirstChildElement();
+    const std::string content((std::istreambuf_iterator<char>(fin)), std::istreambuf_iterator<char>());
+    if (std::all_of(content.cbegin(), content.cend(), [](unsigned char c) { return std::isspace(c) != 0; }))
+        return "failed to load suppressions XML '" + fname + "' (XML_ERROR_EMPTY_DOCUMENT).";
+
+    pugi::xml_document doc;
+    const pugi::xml_parse_result parseRes = doc.load_buffer(content.data(), content.size());
+    if (parseRes.status == pugi::status_no_document_element)
+        return "failed to load suppressions XML '" + fname + "' (no root node found).";
+    if (!parseRes)
+        return "failed to load suppressions XML '" + fname + "' (" + parseRes.description() + ").";
+
+    const pugi::xml_node rootnode = doc.document_element();
     if (!rootnode)
-        return std::string("failed to load suppressions XML '") + filename + "' (no root node found).";
-    // TODO: check for proper root node 'suppressions'
-    for (const tinyxml2::XMLElement * e = rootnode->FirstChildElement(); e; e = e->NextSiblingElement()) {
-        if (std::strcmp(e->Name(), "suppress") != 0)
-            return std::string("invalid suppression xml file '") + filename + "', expected 'suppress' element but got a '" + e->Name() + "'.";
+        return "failed to load suppressions XML '" + fname + "' (no root node found).";
 
-        Suppression s;
-        for (const tinyxml2::XMLElement * e2 = e->FirstChildElement(); e2; e2 = e2->NextSiblingElement()) {
-            const char *name = e2->Name();
-            const char *text = empty_if_null(e2->GetText());
-            if (std::strcmp(name, "id") == 0)
-                s.errorId = text;
-            else if (std::strcmp(name, "fileName") == 0)
-                s.fileName = Path::simplifyPath(text);
-            else if (std::strcmp(name, "lineNumber") == 0)
-                s.lineNumber = strToInt<int>(text);
-            else if (std::strcmp(name, "symbolName") == 0)
-                s.symbolName = text;
-            else if (std::strcmp(name, "macroName") == 0) {
-                s.macroName = text;
-                s.type = SuppressionList::Type::macro;
-            } else if (*text && std::strcmp(name, "hash") == 0)
-                s.hash = strToInt<std::size_t>(text);
-            else
-                return std::string("unknown element '") + name + "' in suppressions XML '" + filename + "', expected id/fileName/lineNumber/symbolName/hash.";
+    // TODO: check for proper root node 'suppressions'
+    for (pugi::xml_node e = rootnode.first_child(); e; e = e.next_sibling()) {
+        if (e.type() != pugi::node_element)
+            continue;
+        if (std::string_view(e.name()) != "suppress")
+            return "invalid suppression xml file '" + fname + "', expected 'suppress' element but got a '" + e.name() + "'.";
+
+        for (pugi::xml_node e2 = e.first_child(); e2; e2 = e2.next_sibling()) {
+            if (e2.type() != pugi::node_element)
+                continue;
+            const std::string_view name = e2.name();
+            const char *text = e2.child_value();
+            const bool valid =
+                (name == "id") ||
+                (name == "fileName") ||
+                (name == "lineNumber") ||
+                (name == "symbolName") ||
+                (name == "macroName") ||
+                (name == "hash" && text && *text != '\0');
+            if (!valid)
+                return "unknown element '" + std::string(name) + "' in suppressions XML '" + fname + "', expected id/fileName/lineNumber/symbolName/hash.";
         }
 
-        std::string err = addSuppression(std::move(s));
+        const auto entry = rfl::xml::read<cppcheck::schemas::SuppressEntrySchema>(e);
+        if (!entry)
+            return "failed to load suppressions XML '" + fname + "' (" + entry.error().what() + ").";
+
+        std::string err = addSuppression(suppressionFromSchema(*entry));
         if (!err.empty())
             return err;
     }
 
     return "";
+}
+
+std::string SuppressionList::parseJson(std::string_view json)
+{
+    const auto parsed = cppcheck::schemas::parseSuppressionsJson(json);
+    if (!parsed)
+        return "failed to load suppressions JSON (" + parsed.error().what() + ").";
+
+    for (const auto& entry : parsed->suppress) {
+        std::string err = addSuppression(suppressionFromSchema(entry));
+        if (!err.empty())
+            return err;
+    }
+    return "";
+}
+
+std::string SuppressionList::toXml() const
+{
+    std::lock_guard<std::mutex> lg(mSuppressionsSync);
+    return cppcheck::schemas::writeSuppressionsXml(toSuppressionsFileSchema(mSuppressions));
+}
+
+std::string SuppressionList::toJson() const
+{
+    std::lock_guard<std::mutex> lg(mSuppressionsSync);
+    return cppcheck::schemas::writeSuppressionsJson(toSuppressionsFileSchema(mSuppressions));
+}
+
+std::string SuppressionList::jsonSchema()
+{
+    return cppcheck::schemas::suppressionsJsonSchema();
 }
 
 static std::string getExtraComment(const std::string &comment, std::string::size_type startPos, std::string::size_type *delimPos = nullptr)
@@ -599,45 +686,42 @@ void SuppressionList::dump(std::ostream & out, const std::string& filePath) cons
 {
     std::lock_guard<std::mutex> lg(mSuppressionsSync);
 
-    out << "  <suppressions>" << std::endl;
+    cppcheck::schemas::DumpSuppressionsSchema schema;
     for (const Suppression &suppression : mSuppressions) {
         if (suppression.isInline && !suppression.fileName.empty() && !filePath.empty() && filePath != suppression.fileName)
             continue;
-        out << "    <suppression";
-        out << " errorId=\"" << ErrorLogger::toxml(suppression.errorId) << '"';
+        cppcheck::schemas::DumpSuppressionSchema entry;
+        entry.errorId = suppression.errorId;
         if (!suppression.fileName.empty())
-            out << " fileName=\"" << ErrorLogger::toxml(suppression.fileName) << '"';
+            entry.fileName = suppression.fileName;
         if (suppression.lineNumber != Suppression::NO_LINE)
-            out << " lineNumber=\"" << suppression.lineNumber << '"';
+            entry.lineNumber = suppression.lineNumber;
         if (suppression.thisAndNextLine)
-            out << " thisAndNextLine=\"true\"";
+            entry.thisAndNextLine = true;
         if (!suppression.symbolName.empty())
-            out << " symbolName=\"" << ErrorLogger::toxml(suppression.symbolName) << '\"';
+            entry.symbolName = suppression.symbolName;
         if (suppression.hash > 0)
-            out << " hash=\"" << suppression.hash << '\"';
+            entry.hash = suppression.hash;
         if (suppression.lineBegin != Suppression::NO_LINE)
-            out << " lineBegin=\"" << suppression.lineBegin << '"';
+            entry.lineBegin = suppression.lineBegin;
         if (suppression.lineEnd != Suppression::NO_LINE)
-            out << " lineEnd=\"" << suppression.lineEnd << '"';
+            entry.lineEnd = suppression.lineEnd;
         if (suppression.type == SuppressionList::Type::file)
-            out << " type=\"file\"";
+            entry.type = std::string("file");
         else if (suppression.type == SuppressionList::Type::block)
-            out << " type=\"block\"";
+            entry.type = std::string("block");
         else if (suppression.type == SuppressionList::Type::blockBegin)
-            out << " type=\"blockBegin\"";
+            entry.type = std::string("blockBegin");
         else if (suppression.type == SuppressionList::Type::blockEnd)
-            out << " type=\"blockEnd\"";
+            entry.type = std::string("blockEnd");
         else if (suppression.type == SuppressionList::Type::macro)
-            out << " type=\"macro\"";
-        if (suppression.isInline)
-            out << " inline=\"true\"";
-        else
-            out << " inline=\"false\"";
+            entry.type = std::string("macro");
+        entry.is_inline = suppression.isInline;
         if (!suppression.extraComment.empty())
-            out << " comment=\"" << ErrorLogger::toxml(suppression.extraComment) << "\"";
-        out << " />" << std::endl;
+            entry.comment = suppression.extraComment;
+        schema.suppression.push_back(std::move(entry));
     }
-    out << "  </suppressions>" << std::endl;
+    out << cppcheck::schemas::writeDumpSuppressionsXml(schema);
 }
 
 std::list<SuppressionList::Suppression> SuppressionList::getUnmatchedLocalSuppressions(const FileWithDetails &file) const

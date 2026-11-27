@@ -26,8 +26,10 @@
 
 #include <cstddef>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace cppcheck::schemas {
 
@@ -86,6 +88,80 @@ inline std::string writePlatformJson(const PlatformSchema& s) {
 
 inline std::string platformJsonSchema() {
     return rfl::json::to_schema<PlatformSchema>();
+}
+
+// ---------------------------------------------------------------------------
+// Domain 2: Suppressions XML / JSON / Dump schema
+// ---------------------------------------------------------------------------
+
+struct SuppressEntrySchema {
+    std::optional<std::string> id;
+    std::optional<std::string> fileName;
+    std::optional<int> lineNumber;
+    std::optional<std::string> symbolName;
+    std::optional<std::string> macroName;
+    std::optional<std::size_t> hash;
+};
+
+struct SuppressionsFileSchema {
+    std::vector<SuppressEntrySchema> suppress;
+};
+
+struct DumpSuppressionSchema {
+    rfl::Attribute<std::string> errorId;
+    rfl::Attribute<std::optional<std::string>> fileName;
+    rfl::Attribute<std::optional<int>> lineNumber;
+    rfl::Attribute<std::optional<bool>> thisAndNextLine;
+    rfl::Attribute<std::optional<std::string>> symbolName;
+    rfl::Attribute<std::optional<std::size_t>> hash;
+    rfl::Attribute<std::optional<int>> lineBegin;
+    rfl::Attribute<std::optional<int>> lineEnd;
+    rfl::Attribute<std::optional<std::string>> type;
+    rfl::Rename<"inline", rfl::Attribute<bool>> is_inline = false;
+    rfl::Attribute<std::optional<std::string>> comment;
+};
+
+struct DumpSuppressionsSchema {
+    std::vector<DumpSuppressionSchema> suppression;
+};
+
+inline std::string writeSuppressionsXml(const SuppressionsFileSchema& s) {
+    return rfl::xml::write<"suppressions">(s, "  ");
+}
+
+inline std::string writeDumpSuppressionsXml(const DumpSuppressionsSchema& s) {
+    pugi::xml_document doc;
+    rfl::xml::write<"suppressions">(s, doc);
+    std::ostringstream oss;
+    doc.save(oss, "  ", pugi::format_default | pugi::format_no_declaration);
+    const std::string raw = oss.str();
+    std::string prefixed;
+    prefixed.reserve(raw.size() + 32);
+    std::size_t pos = 0;
+    while (pos < raw.size()) {
+        const std::size_t nl = raw.find('\n', pos);
+        const std::size_t end = (nl == std::string::npos) ? raw.size() : nl + 1;
+        prefixed += "  ";
+        prefixed.append(raw, pos, end - pos);
+        pos = end;
+    }
+    return prefixed;
+}
+
+inline rfl::Result<SuppressionsFileSchema> parseSuppressionsJson(std::string_view json) {
+    return rfl::json::read<SuppressionsFileSchema>(json);
+}
+
+inline std::string writeSuppressionsJson(const SuppressionsFileSchema& s) {
+    return rfl::json::write(s);
+}
+
+inline std::string suppressionsJsonSchema() {
+    return rfl::json::to_schema<SuppressionsFileSchema>();
+}
+
+inline std::string dumpSuppressionsJsonSchema() {
+    return rfl::json::to_schema<DumpSuppressionsSchema>();
 }
 
 } // namespace cppcheck::schemas

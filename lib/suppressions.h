@@ -29,6 +29,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -190,6 +191,28 @@ public:
      * @return error message. empty upon success
      */
     std::string parseXmlFile(const char *filename);
+
+    /**
+     * @brief Parse suppressions from JSON string.
+     * @param json JSON document matching SuppressionsFileSchema
+     * @return error message. empty upon success
+     */
+    std::string parseJson(std::string_view json);
+
+    /**
+     * @brief Serialize suppressions to XML string.
+     */
+    std::string toXml() const;
+
+    /**
+     * @brief Serialize suppressions to JSON string.
+     */
+    std::string toJson() const;
+
+    /**
+     * @brief Generate JSON Schema for suppressions files.
+     */
+    static std::string jsonSchema();
 
     /**
      * Parse multi inline suppression in comment

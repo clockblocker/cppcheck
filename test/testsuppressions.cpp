@@ -120,6 +120,9 @@ private:
         TEST_CASE(hashSuppression);
 
         TEST_CASE(suppressionsParseXmlFile);
+        TEST_CASE(suppressionsXmlJsonRoundtrip);
+        TEST_CASE(suppressionsDumpXml);
+        TEST_CASE(suppressionsJsonSchema);
         TEST_CASE(xmlMacroSuppressions);
 
         TEST_CASE(toString);
@@ -1918,6 +1921,105 @@ private:
             SuppressionList supprList;
             ASSERT_EQUALS("unknown element 'eid' in suppressions XML 'suppressparsexml.xml', expected id/fileName/lineNumber/symbolName/hash.", supprList.parseXmlFile(file.path().c_str()));
         }
+
+        // empty hash element
+        {
+            ScopedFile file("suppressparsexml.xml",
+                            "<suppressions>\n"
+                            "<suppress>\n"
+                            "<id>uninitvar</id>\n"
+                            "<hash></hash>\n"
+                            "</suppress>\n"
+                            "</suppressions>");
+
+            SuppressionList supprList;
+            ASSERT_EQUALS("unknown element 'hash' in suppressions XML 'suppressparsexml.xml', expected id/fileName/lineNumber/symbolName/hash.", supprList.parseXmlFile(file.path().c_str()));
+        }
+    }
+
+    void suppressionsXmlJsonRoundtrip() const {
+        SuppressionList orig;
+        SuppressionList::Suppression s1("uninitvar", "src/a.cpp", 42);
+        s1.symbolName = "ptr";
+        s1.hash = 123456;
+        ASSERT_EQUALS("", orig.addSuppression(s1));
+
+        SuppressionList::Suppression s2;
+        s2.errorId = "nullPointer";
+        s2.macroName = "MY_MACRO";
+        s2.type = SuppressionList::Type::macro;
+        ASSERT_EQUALS("", orig.addSuppression(s2));
+
+        const std::string xml = orig.toXml();
+        ASSERT(xml.find("<suppressions>") != std::string::npos);
+        ASSERT(xml.find("<id>uninitvar</id>") != std::string::npos);
+        ASSERT(xml.find("<macroName>MY_MACRO</macroName>") != std::string::npos);
+
+        {
+            ScopedFile file("suppressroundtrip.xml", xml);
+            SuppressionList fromXml;
+            ASSERT_EQUALS("", fromXml.parseXmlFile(file.path().c_str()));
+            const auto supprs = fromXml.getSuppressions();
+            ASSERT_EQUALS(2, supprs.size());
+            auto it = supprs.cbegin();
+            ASSERT_EQUALS("uninitvar", it->errorId);
+            ASSERT_EQUALS("src/a.cpp", it->fileName);
+            ASSERT_EQUALS(42, it->lineNumber);
+            ASSERT_EQUALS("ptr", it->symbolName);
+            ASSERT_EQUALS(123456, it->hash);
+            ++it;
+            ASSERT_EQUALS("nullPointer", it->errorId);
+            ASSERT_EQUALS("MY_MACRO", it->macroName);
+            ASSERT_EQUALS_ENUM(SuppressionList::Type::macro, it->type);
+        }
+
+        const std::string json = orig.toJson();
+        ASSERT(json.find("\"uninitvar\"") != std::string::npos);
+        ASSERT(json.find("\"MY_MACRO\"") != std::string::npos);
+
+        SuppressionList fromJson;
+        ASSERT_EQUALS("", fromJson.parseJson(json));
+        const auto supprs = fromJson.getSuppressions();
+        ASSERT_EQUALS(2, supprs.size());
+        auto it = supprs.cbegin();
+        ASSERT_EQUALS("uninitvar", it->errorId);
+        ASSERT_EQUALS("src/a.cpp", it->fileName);
+        ASSERT_EQUALS(42, it->lineNumber);
+        ASSERT_EQUALS("ptr", it->symbolName);
+        ASSERT_EQUALS(123456, it->hash);
+        ++it;
+        ASSERT_EQUALS("nullPointer", it->errorId);
+        ASSERT_EQUALS("MY_MACRO", it->macroName);
+        ASSERT_EQUALS_ENUM(SuppressionList::Type::macro, it->type);
+    }
+
+    void suppressionsDumpXml() const {
+        SuppressionList supprs;
+        SuppressionList::Suppression s("some_warning_id", "proj/2.c", 2);
+        s.isInline = true;
+        s.extraComment = "a <comment> & note";
+        ASSERT_EQUALS("", supprs.addSuppression(s));
+
+        SuppressionList::Suppression s2("foo", "");
+        ASSERT_EQUALS("", supprs.addSuppression(s2));
+
+        std::ostringstream oss;
+        supprs.dump(oss);
+        const std::string dumped = oss.str();
+        ASSERT_EQUALS(
+            "  <suppressions>\n"
+            "    <suppression errorId=\"some_warning_id\" fileName=\"proj/2.c\" lineNumber=\"2\" inline=\"true\" comment=\"a &lt;comment> &amp; note\" />\n"
+            "    <suppression errorId=\"foo\" inline=\"false\" />\n"
+            "  </suppressions>\n",
+            dumped);
+    }
+
+    void suppressionsJsonSchema() const {
+        const std::string schema = SuppressionList::jsonSchema();
+        ASSERT(schema.find("\"suppress\"") != std::string::npos);
+        ASSERT(schema.find("\"fileName\"") != std::string::npos);
+        ASSERT(schema.find("\"lineNumber\"") != std::string::npos);
+        ASSERT(schema.find("\"macroName\"") != std::string::npos);
     }
 
     #define testXmlSuppressions(...) testXmlSuppressions_(__FILE__,__LINE__,__VA_ARGS__)
