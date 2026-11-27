@@ -54,6 +54,7 @@ target_dll_compile_definitions(cppcheck-core EXPORT CPPCHECKLIB_EXPORT IMPORT CP
 
 target_include_directories(cppcheck-core PUBLIC .)
 target_link_libraries(cppcheck-core PRIVATE tinyxml2 simplecpp picojson ${PCRE_LIBRARY})
+target_link_libraries(cppcheck-core PUBLIC reflectcpp)
 
 if (HAVE_RULES)
     target_include_directories(cppcheck-core SYSTEM PRIVATE ${PCRE_INCLUDE})
