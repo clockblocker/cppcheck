@@ -126,9 +126,13 @@ static bool addPathsToSet(const std::string& fileName, std::set<std::string>& se
 }
 
 namespace {
-    using rfl::cli::Opt;
+    using rfl::cli::Arg;
+    using rfl::cli::Flag;
+    using rfl::cli::OptGroup;
     using namespace rfl::cli::attr;
 
+    // Presets.hpp (GnuStyle/GnuLastWins/PosixStrict) all bundle SeparateOptionValues,
+    // which would override RequireEquals; cppcheck rejects `--opt val` without `=`.
     using CppcheckCliProcessors = rfl::Processors<
         rfl::DefaultIfMissing,
         rfl::NoExtraFields,
@@ -137,228 +141,226 @@ namespace {
         rfl::cli::RequireEquals,
         rfl::cli::ListDelimiter<"">>;
 
-    struct CppcheckArgs {
-        Opt<std::vector<std::string>, ValueName<"addon">,
-            Desc<"Execute addon, e.g. --addon=misra. If options must be provided a json configuration is needed.">>
-            addon{};
-        Opt<std::optional<std::string>, ValueName<"python interpreter">,
-            Desc<"Python interpreter for addons (default tries \"python3\", then \"python\").">>
-            addon_python{};
-        Opt<bool, Hidden> analyze_all_vs_configs{false};
-        Opt<bool, Short<"CC">,
-            Desc<"Do not remove comments during preprocessing (requires -E).">>
-            keep_comments{false};
-        Opt<std::optional<std::string>, ValueName<"dir">,
-            Desc<"Cppcheck work folder for whole program analysis and cached results.">>
-            cppcheck_build_dir{};
-        Opt<bool, Desc<"Check cppcheck configuration. Normal code analysis is disabled.">>
-            check_config{false};
-        Opt<bool, Hidden> check_headers{false};
-        Opt<std::optional<std::string>, ValueName<"level">, DefaultHint<"normal">,
-            Desc<"Configure valueflow analysis depth: reduced, normal, or exhaustive.">>
-            check_level{};
-        Opt<bool, Desc<"Show information messages when library files have incomplete info.">>
-            check_library{false};
-        Opt<bool, Hidden> check_unused_templates{false};
-        Opt<std::optional<std::string>, Hidden> check_version{};
-        Opt<std::optional<std::string>, ValueName<"file">,
-            Desc<"Write a report of all active checkers to the given file.">>
-            checkers_report{};
-        Opt<std::optional<std::string>, Hidden> checks_max_time{};
-        Opt<std::optional<std::string>, Implicit<"clang">, ValueName<"path">,
-            Deprecated<"Use Clang parser instead of the builtin Cppcheck parser (will be removed in Cppcheck 2.27).">>
-            clang{};
-        Opt<std::optional<std::string>, Implicit<"clang-tidy">, Hidden> clang_tidy{};
-        Opt<std::vector<std::string>, ValueName<"dir">,
-            Desc<"Path prefix to exclude from configuration checking in headers.">>
-            config_exclude{};
-        Opt<std::vector<std::string>, ValueName<"file">,
-            Desc<"A file containing a list of config-excludes.">>
-            config_excludes_file{};
-        Opt<bool, Hidden> cpp_header_probe{false};
-        Opt<bool, Hidden> debug{false};
-        Opt<bool, Hidden> debug_analyzerinfo{false};
-        Opt<bool, Hidden> debug_ast{false};
-        Opt<bool, Hidden> debug_clang_output{false};
-        Opt<bool, Hidden> debug_ignore{false};
-        Opt<bool, Hidden> debug_ipc{false};
-        Opt<std::optional<std::string>, Implicit<"all">, Hidden> debug_lookup{};
-        Opt<bool, Hidden> debug_normal{false};
-        Opt<bool, Hidden> debug_simplified{false};
-        Opt<bool, Hidden> debug_symdb{false};
-        Opt<bool, Hidden> debug_template{false};
-        Opt<bool, Hidden> debug_valueflow{false};
-        Opt<bool, Hidden> debug_warnings{false};
-        Opt<std::vector<std::string>, ValueName<"severity">,
-            Desc<"Disable checks with the given severity (see --enable).">>
-            disable{};
-        Opt<bool, Hidden> doc{false};
-        Opt<bool, Desc<"Dump xml data (.dump) for each translation unit.">>
-            dump{false};
-        Opt<std::vector<std::string>, Short<"D">, ValueName<"ID">,
-            Desc<"Define preprocessor symbol (e.g. -DDEBUG=1 -D__cplusplus).">>
-            define{};
-        Opt<bool, Short<"E">,
-            Desc<"Print preprocessor output on stdout and don't do any further processing.">>
-            preprocess_only{false};
-        Opt<bool, Hidden> emit_duplicates{false};
-        Opt<std::vector<std::string>, ValueName<"severity">,
-            Desc<"Enable additional checks (comma-separated: warning, performance, portability, information, style, unusedFunction, missingInclude, all).">>
-            enable{};
-        Opt<std::optional<std::string>, ValueName<"n">, DefaultHint<"0">,
-            Desc<"Exit code returned if errors are found.">>
-            error_exitcode{};
-        Opt<bool, Desc<"Print a list of all error messages in XML format.">>
-            errorlist{false};
-        Opt<std::optional<std::string>, Implicit<"stdout">, Hidden> exception_handling{};
-        Opt<std::optional<std::string>, Hidden> executor{};
-        Opt<std::vector<std::string>, ValueName<"spec">,
-            Desc<"Error ID which should not result in a non-zero exitcode.">>
-            exitcode_suppress{};
-        Opt<std::vector<std::string>, ValueName<"file">,
-            Desc<"File of error IDs that should not cause a non-zero exitcode.">>
-            exitcode_suppressions{};
-        Opt<std::vector<std::string>, ValueName<"str">,
-            Desc<"Analyze only files matching filter ('-' reads from stdin, '+' uses CLI files as filters).">>
-            file_filter{};
-        Opt<std::vector<std::string>, ValueName<"file">,
-            Desc<"Text file listing files to check, one per line ('-' reads from stdin).">>
-            file_list{};
-        Opt<bool, Hidden> filesdir{false};
-        Opt<bool, Short<"f">,
-            Desc<"Force checking of all configurations in files (overrides --max-configs).">>
-            force{false};
-        Opt<bool, Desc<"Treat char type as signed.">> fsigned_char{false};
-        Opt<bool, Desc<"Treat char type as unsigned.">> funsigned_char{false};
-        Opt<bool, Short<"h">, Desc<"Print this help.">> help{false};
-        Opt<std::vector<std::string>, Short<"I">, ValueName<"dir">,
-            Desc<"Directory to search for include files.">>
-            include_dir{};
-        Opt<std::vector<std::string>, ValueName<"file">,
-            Desc<"Text file listing include directories, one per line.">>
-            includes_file{};
-        Opt<std::vector<std::string>, ValueName<"file">,
-            Desc<"Force inclusion of a file before the checked file.">>
-            include{};
-        Opt<std::vector<std::string>, Short<"i">, ValueName<"str">,
-            Desc<"Ignore files or directories matching glob pattern.">>
-            ignore{};
-        Opt<bool, Desc<"Allow reporting inconclusive analysis results.">>
-            inconclusive{false};
-        Opt<bool, Desc<"Enable inline suppressions (e.g. '// cppcheck-suppress warningId').">>
-            inline_suppr{false};
-        Opt<std::optional<std::string>, Short<"j">, ValueName<"jobs">,
-            Desc<"Start <jobs> threads to do the checking simultaneously.">>
-            jobs{};
-        Opt<std::optional<std::string>, Short<"l">, ValueName<"load">,
-            Desc<"Do not start new threads if load average is at least <load>.">>
-            load_average{};
-        Opt<std::optional<std::string>, Short<"x">, ValueName<"language">,
-            Desc<"Force checking all files as the given language (c or c++).">>
-            language{};
-        Opt<std::vector<std::string>, ValueName<"cfg">,
-            Desc<"Load library configuration file <cfg> (std.cfg is loaded automatically).">>
-            library{};
-        Opt<std::optional<std::string>, ValueName<"limit">, DefaultHint<"12">,
-            Desc<"Maximum number of #ifdef configurations to check in a file (overrides --force).">>
-            max_configs{};
-        Opt<std::optional<std::string>, ValueName<"N">, DefaultHint<"2">,
-            Desc<"Max depth in whole program analysis.">>
-            max_ctu_depth{};
-        Opt<std::optional<std::string>, Hidden> max_template_recursion{};
-        Opt<bool, Hidden> no_analyze_all_vs_configs{false};
-        Opt<bool, Hidden> no_check_headers{false};
-        Opt<bool, Hidden> no_check_unused_templates{false};
-        Opt<bool, Hidden> no_cppcheck_build_dir{false};
-        Opt<bool, Hidden> no_cpp_header_probe{false};
-        Opt<bool, Hidden> no_safety{false};
-        Opt<std::optional<std::string>, ValueName<"file">,
-            Desc<"Write results to file rather than standard error.">>
-            output_file{};
-        Opt<std::optional<std::string>, ValueName<"format">,
-            Desc<"Output format: text, sarif, xml (deprecated), xmlv2, or xmlv3.">>
-            output_format{};
-        Opt<std::optional<std::string>, Hidden> performance_valueflow_max_time{};
-        Opt<std::optional<std::string>, Hidden> performance_valueflow_max_if_count{};
-        Opt<std::optional<std::string>, Hidden> performance_valueflow_max_iterations{};
-        Opt<std::optional<std::string>, ValueName<"type|file">,
-            Desc<"Platform-specific types and sizes (unix32, unix64, win32A, win32W, win64, avr8, elbrus-e1cp, pic8, pic8-enhanced, pic16, mips32, native, unspecified, or XML file).">>
-            platform{};
-        Opt<std::optional<std::string>, ValueName<"path">,
-            Desc<"Generate Clang-plist output files in folder.">>
-            plist_output{};
-        Opt<std::vector<std::string>, Group<"Premium">, ValueName<"option">,
+    struct PremiumArgs {
+        Arg<std::vector<std::string>, ValueName<"option">,
             Desc<"Cppcheck Premium option (autosar, cert-c, cert-c++, misra-c-2012/2023/2025, misra-c++-2008/2023, bughunting, metrics, safety, safety-off; append :all for coding standards).">>
             premium{};
-        Opt<std::optional<std::string>, Group<"Premium">, ValueName<"BITS">,
+        Arg<std::optional<std::string>, ValueName<"BITS">,
             Desc<"Integer precision to use in Cert C INT35-C analysis.">>
             premium_cert_c_int_precision{};
-        Opt<std::optional<std::string>, Group<"Premium">, ValueName<"path">,
+        Arg<std::optional<std::string>, ValueName<"path">,
             Desc<"Provide Cppcheck Premium license file path.">>
             premium_license_file{};
-        Opt<std::vector<std::string>, ValueName<"file">,
+    };
+
+    struct CppcheckArgs {
+        Arg<std::vector<std::string>, ValueName<"addon">,
+            Desc<"Execute addon, e.g. --addon=misra. If options must be provided a json configuration is needed.">>
+            addon{};
+        Arg<std::optional<std::string>, ValueName<"python interpreter">,
+            Desc<"Python interpreter for addons (default tries \"python3\", then \"python\").">>
+            addon_python{};
+        Flag<Hidden, Negatable<>> analyze_all_vs_configs{false};
+        Flag<Short<"CC">,
+            Desc<"Do not remove comments during preprocessing (requires -E).">>
+            keep_comments{false};
+        Arg<std::optional<std::string>, ValueName<"dir">,
+            Desc<"Cppcheck work folder for whole program analysis and cached results.">>
+            cppcheck_build_dir{};
+        Flag<Desc<"Check cppcheck configuration. Normal code analysis is disabled.">>
+            check_config{false};
+        Flag<Hidden, Negatable<>> check_headers{false};
+        Arg<std::optional<std::string>, ValueName<"level">, DefaultHint<"normal">,
+            Desc<"Configure valueflow analysis depth: reduced, normal, or exhaustive.">>
+            check_level{};
+        Flag<Desc<"Show information messages when library files have incomplete info.">>
+            check_library{false};
+        Flag<Hidden, Negatable<>> check_unused_templates{false};
+        Arg<std::optional<std::string>, Hidden> check_version{};
+        Arg<std::optional<std::string>, ValueName<"file">,
+            Desc<"Write a report of all active checkers to the given file.">>
+            checkers_report{};
+        Arg<std::optional<std::string>, Hidden> checks_max_time{};
+        Arg<std::optional<std::string>, Implicit<"clang">, ValueName<"path">,
+            Deprecated<"Use Clang parser instead of the builtin Cppcheck parser (will be removed in Cppcheck 2.27).">>
+            clang{};
+        Arg<std::optional<std::string>, Implicit<"clang-tidy">, Hidden> clang_tidy{};
+        Arg<std::vector<std::string>, ValueName<"dir">,
+            Desc<"Path prefix to exclude from configuration checking in headers.">>
+            config_exclude{};
+        Arg<std::vector<std::string>, ValueName<"file">,
+            Desc<"A file containing a list of config-excludes.">>
+            config_excludes_file{};
+        Flag<Hidden, Negatable<>> cpp_header_probe{false};
+        Flag<Hidden, Alias<"debug-normal">> debug{false};
+        Flag<Hidden> debug_analyzerinfo{false};
+        Flag<Hidden> debug_ast{false};
+        Flag<Hidden> debug_clang_output{false};
+        Flag<Hidden> debug_ignore{false};
+        Flag<Hidden> debug_ipc{false};
+        Arg<std::optional<std::string>, Implicit<"all">, Hidden> debug_lookup{};
+        Flag<Hidden> debug_simplified{false};
+        Flag<Hidden> debug_symdb{false};
+        Flag<Hidden> debug_template{false};
+        Flag<Hidden> debug_valueflow{false};
+        Flag<Hidden> debug_warnings{false};
+        Arg<std::vector<std::string>, ValueName<"severity">,
+            Desc<"Disable checks with the given severity (see --enable).">>
+            disable{};
+        Flag<Hidden> doc{false};
+        Flag<Desc<"Dump xml data (.dump) for each translation unit.">>
+            dump{false};
+        Arg<std::vector<std::string>, Short<"D">, ValueName<"ID">,
+            Desc<"Define preprocessor symbol (e.g. -DDEBUG=1 -D__cplusplus).">>
+            define{};
+        Flag<Short<"E">,
+            Desc<"Print preprocessor output on stdout and don't do any further processing.">>
+            preprocess_only{false};
+        Flag<Hidden> emit_duplicates{false};
+        Arg<std::vector<std::string>, ValueName<"severity">,
+            Desc<"Enable additional checks (comma-separated: warning, performance, portability, information, style, unusedFunction, missingInclude, all).">>
+            enable{};
+        Arg<std::optional<std::string>, ValueName<"n">, DefaultHint<"0">,
+            Desc<"Exit code returned if errors are found.">>
+            error_exitcode{};
+        Flag<Desc<"Print a list of all error messages in XML format.">>
+            errorlist{false};
+        Arg<std::optional<std::string>, Implicit<"stdout">, Hidden> exception_handling{};
+        Arg<std::optional<std::string>, Hidden> executor{};
+        Arg<std::vector<std::string>, ValueName<"spec">,
+            Desc<"Error ID which should not result in a non-zero exitcode.">>
+            exitcode_suppress{};
+        Arg<std::vector<std::string>, ValueName<"file">,
+            Desc<"File of error IDs that should not cause a non-zero exitcode.">>
+            exitcode_suppressions{};
+        Arg<std::vector<std::string>, ValueName<"str">,
+            Desc<"Analyze only files matching filter ('-' reads from stdin, '+' uses CLI files as filters).">>
+            file_filter{};
+        Arg<std::vector<std::string>, ValueName<"file">,
+            Desc<"Text file listing files to check, one per line ('-' reads from stdin).">>
+            file_list{};
+        Flag<Hidden> filesdir{false};
+        Flag<Short<"f">,
+            Desc<"Force checking of all configurations in files (overrides --max-configs).">>
+            force{false};
+        Flag<Desc<"Treat char type as signed.">> fsigned_char{false};
+        Flag<Desc<"Treat char type as unsigned.">> funsigned_char{false};
+        Flag<Short<"h">, Desc<"Print this help.">> help{false};
+        Arg<std::vector<std::string>, Short<"I">, ValueName<"dir">,
+            Desc<"Directory to search for include files.">>
+            include_dir{};
+        Arg<std::vector<std::string>, ValueName<"file">,
+            Desc<"Text file listing include directories, one per line.">>
+            includes_file{};
+        Arg<std::vector<std::string>, ValueName<"file">,
+            Desc<"Force inclusion of a file before the checked file.">>
+            include{};
+        Arg<std::vector<std::string>, Short<"i">, ValueName<"str">,
+            Desc<"Ignore files or directories matching glob pattern.">>
+            ignore{};
+        Flag<Desc<"Allow reporting inconclusive analysis results.">>
+            inconclusive{false};
+        Flag<Desc<"Enable inline suppressions (e.g. '// cppcheck-suppress warningId').">>
+            inline_suppr{false};
+        Arg<std::optional<std::string>, Short<"j">, ValueName<"jobs">,
+            Desc<"Start <jobs> threads to do the checking simultaneously.">>
+            jobs{};
+        Arg<std::optional<std::string>, Short<"l">, ValueName<"load">,
+            Desc<"Do not start new threads if load average is at least <load>.">>
+            load_average{};
+        Arg<std::optional<std::string>, Short<"x">, ValueName<"language">,
+            Desc<"Force checking all files as the given language (c or c++).">>
+            language{};
+        Arg<std::vector<std::string>, ValueName<"cfg">,
+            Desc<"Load library configuration file <cfg> (std.cfg is loaded automatically).">>
+            library{};
+        Arg<std::optional<std::string>, ValueName<"limit">, DefaultHint<"12">,
+            Desc<"Maximum number of #ifdef configurations to check in a file (overrides --force).">>
+            max_configs{};
+        Arg<std::optional<std::string>, ValueName<"N">, DefaultHint<"2">,
+            Desc<"Max depth in whole program analysis.">>
+            max_ctu_depth{};
+        Arg<std::optional<std::string>, Hidden> max_template_recursion{};
+        Flag<Hidden> no_cppcheck_build_dir{false};
+        Arg<std::optional<std::string>, ValueName<"file">,
+            Desc<"Write results to file rather than standard error.">>
+            output_file{};
+        Arg<std::optional<std::string>, ValueName<"format">,
+            Desc<"Output format: text, sarif, xml (deprecated), xmlv2, or xmlv3.">>
+            output_format{};
+        Arg<std::optional<std::string>, Hidden> performance_valueflow_max_time{};
+        Arg<std::optional<std::string>, Hidden> performance_valueflow_max_if_count{};
+        Arg<std::optional<std::string>, Hidden> performance_valueflow_max_iterations{};
+        Arg<std::optional<std::string>, ValueName<"type|file">,
+            Desc<"Platform-specific types and sizes (unix32, unix64, win32A, win32W, win64, avr8, elbrus-e1cp, pic8, pic8-enhanced, pic16, mips32, native, unspecified, or XML file).">>
+            platform{};
+        Arg<std::optional<std::string>, ValueName<"path">,
+            Desc<"Generate Clang-plist output files in folder.">>
+            plist_output{};
+        OptGroup<"Premium", PremiumArgs> premium_opts{};
+        Arg<std::vector<std::string>, ValueName<"file">,
             Desc<"Run Cppcheck on project (*.sln, *.slnx, *.vcxproj, compile_commands.json, *.bpr).">>
             project{};
-        Opt<std::optional<std::string>, ValueName<"config">,
+        Arg<std::optional<std::string>, ValueName<"config">,
             Desc<"Limit Visual Studio project configuration (e.g. 'Release|Win32').">>
             project_configuration{};
-        Opt<bool, Short<"q">,
+        Flag<Short<"q">,
             Desc<"Do not show progress reports (not mutually exclusive with --verbose).">>
             quiet{false};
-        Opt<std::vector<std::string>, Short<"rp">, Implicit<"">, ValueName<"paths">,
+        Arg<std::vector<std::string>, Short<"rp">, Implicit<"">, ValueName<"paths">,
             Desc<"Use relative paths in output (separate multiple base paths by ';').">>
             relative_paths{};
-        Opt<std::optional<std::string>, Implicit<"10">,
+        Arg<std::optional<std::string>, Implicit<"10">,
             Desc<"Report progress messages while checking a file (single job only).">>
             report_progress{};
-        Opt<std::optional<std::string>, ValueName<"type">,
+        Arg<std::optional<std::string>, ValueName<"type">,
             Desc<"Add guideline/classification fields: normal, autosar, cert-c-2016, cert-cpp-2016, misra-c-2012, misra-c-2023, misra-c-2025, misra-cpp-2008, misra-cpp-2023.">>
             report_type{};
-        Opt<std::vector<std::string>, ValueName<"rule">,
+        Arg<std::vector<std::string>, ValueName<"rule">,
             Desc<"Match regular expression.">>
             rule{};
-        Opt<std::vector<std::string>, ValueName<"file">,
+        Arg<std::vector<std::string>, ValueName<"file">,
             Desc<"Use given rule XML file.">>
             rule_file{};
-        Opt<bool, Desc<"Enable safety-certified checking mode.">>
+        Flag<Negatable<>, Desc<"Enable safety-certified checking mode.">>
             safety{false};
-        Opt<std::optional<std::string>, ValueName<"mode">, DefaultHint<"none">,
+        Arg<std::optional<std::string>, ValueName<"mode">, DefaultHint<"none">,
             Desc<"Show timing information: none, file, file-total, summary, top5_file, top5_summary.">>
             showtime{};
-        Opt<std::vector<std::string>, ValueName<"id">,
+        Arg<std::vector<std::string>, ValueName<"id">,
             Desc<"Set language standard: c89, c99, c11, c++03, c++11, c++14, c++17, c++20.">>
             std{};
-        Opt<std::vector<std::string>, ValueName<"spec">,
+        Arg<std::vector<std::string>, ValueName<"spec">,
             Desc<"Suppress warnings matching [error id]:[filename]:[line].">>
             suppress{};
-        Opt<std::vector<std::string>, ValueName<"file">,
+        Arg<std::vector<std::string>, ValueName<"file">,
             Desc<"Suppress warnings listed in the given file.">>
             suppressions_list{};
-        Opt<std::vector<std::string>, ValueName<"file">,
+        Arg<std::vector<std::string>, ValueName<"file">,
             Desc<"Suppress warnings listed in an XML file.">>
             suppress_xml{};
         rfl::Rename<"template",
-            Opt<std::optional<std::string>, ValueName<"'<text>'">,
+            Arg<std::optional<std::string>, ValueName<"'<text>'">,
                 Desc<"Format error messages (pre-defined: gcc, cppcheck1, vs, edit, simple).">>>
             template_format{};
-        Opt<std::optional<std::string>, ValueName<"'<text>'">,
+        Arg<std::optional<std::string>, ValueName<"'<text>'">,
             Desc<"Format error message location.">>
             template_location{};
-        Opt<std::optional<std::string>, Hidden> template_max_time{};
-        Opt<std::optional<std::string>, Hidden> typedef_max_time{};
-        Opt<std::vector<std::string>, Short<"U">, ValueName<"ID">,
+        Arg<std::optional<std::string>, Hidden> template_max_time{};
+        Arg<std::optional<std::string>, Hidden> typedef_max_time{};
+        Arg<std::vector<std::string>, Short<"U">, ValueName<"ID">,
             Desc<"Undefine preprocessor symbol (e.g. -UDEBUG).">>
             undefine{};
-        Opt<std::optional<std::string>, Hidden> valueflow_max_iterations{};
-        Opt<bool, Short<"v">,
+        Arg<std::optional<std::string>, Hidden> valueflow_max_iterations{};
+        Flag<Short<"v">,
             Desc<"Output more detailed error information (not mutually exclusive with --quiet).">>
             verbose{false};
-        Opt<bool, Desc<"Print out version number.">>
+        Flag<Desc<"Print out version number.">>
             version{false};
-        Opt<bool, Desc<"Write results in xml format to error stream (stderr).">>
+        Flag<Desc<"Write results in xml format to error stream (stderr).">>
             xml{false};
-        Opt<std::optional<std::string>, Hidden> xml_version{};
-        Opt<std::vector<std::string>, Positional> files{};
+        Arg<std::optional<std::string>, Hidden> xml_version{};
+        Arg<std::vector<std::string>, Positional> files{};
     };
 
     template<typename T>
@@ -721,7 +723,6 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
         return Result::Fail;
     }
     const auto& occurrences = parsed->occurrences;
-    const auto& positionalFiles = parsed->value.files.value();
 
     bool debug = false;
     bool inputAsFilter = false; // set by: --file-filter=+
@@ -772,14 +773,14 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
             mSettings.addonPython = val;
         }
         else if (opt == "analyze-all-vs-configs") {
-            mSettings.analyzeAllVsConfigs = true;
+            mSettings.analyzeAllVsConfigs = (val != "false");
             mAnalyzeAllVsConfigsSetOnCmdLine = true;
         }
         else if (opt == "check-config") {
             mSettings.checkConfiguration = true;
         }
         else if (opt == "check-headers") {
-            mSettings.checkHeaders = true;
+            mSettings.checkHeaders = (val != "false");
         }
         else if (opt == "check-level") {
             Settings::CheckLevel level = Settings::CheckLevel::normal;
@@ -799,7 +800,7 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
             mSettings.checkLibrary = true;
         }
         else if (opt == "check-unused-templates") {
-            mSettings.checkUnusedTemplates = true;
+            mSettings.checkUnusedTemplates = (val != "false");
         }
         else if (opt == "check-version") {
             if (!loadCppcheckCfg())
@@ -844,7 +845,7 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
             mSettings.buildDir = std::move(path);
         }
         else if (opt == "cpp-header-probe") {
-            mSettings.cppHeaderProbe = true;
+            mSettings.cppHeaderProbe = (val != "false");
         }
         else if (opt == "debug-analyzerinfo") {
             mSettings.debugainfo = true;
@@ -861,7 +862,7 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
         else if (opt == "debug-ipc") {
             mSettings.debugipc = true;
         }
-        else if (opt == "debug" || opt == "debug-normal") {
+        else if (opt == "debug") {
             debug = true;
         }
         else if (opt == "debug-lookup") {
@@ -1095,24 +1096,8 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
             if (!parseNumberValue(mLogger, "--max-template-recursion=", val, mSettings.maxTemplateRecursion))
                 return Result::Fail;
         }
-        else if (opt == "no-analyze-all-vs-configs") {
-            mSettings.analyzeAllVsConfigs = false;
-            mAnalyzeAllVsConfigsSetOnCmdLine = true;
-        }
-        else if (opt == "no-check-headers") {
-            mSettings.checkHeaders = false;
-        }
-        else if (opt == "no-check-unused-templates") {
-            mSettings.checkUnusedTemplates = false;
-        }
         else if (opt == "no-cppcheck-build-dir") {
             mSettings.buildDir.clear();
-        }
-        else if (opt == "no-cpp-header-probe") {
-            mSettings.cppHeaderProbe = false;
-        }
-        else if (opt == "no-safety") {
-            mSettings.safety = false;
         }
         else if (opt == "output-file") {
             mSettings.outputFile = Path::simplifyPath(val);
@@ -1471,7 +1456,7 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
 #endif
         }
         else if (opt == "safety") {
-            mSettings.safety = true;
+            mSettings.safety = (val != "false");
         }
         else if (opt == "showtime") {
             if (val == "file")
@@ -1603,7 +1588,7 @@ CmdLineParser::Result CmdLineParser::parseFromArgs(int argc, const char* const a
         }
     }
 
-    for (const auto& f : positionalFiles) {
+    for (const auto& f : *parsed->value.files) {
         mPathNames.emplace_back(Path::fromNativeSeparators(Path::removeQuotationMarks(f)));
     }
 
